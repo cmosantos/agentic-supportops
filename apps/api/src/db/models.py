@@ -5,7 +5,8 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from db.base import Base
 from domain.incident import IncidentPriority, IncidentStatus
-from domain.investigation import InvestigationStepStatus
+from domain.investigation import InvestigationOrigin, InvestigationStepStatus
+from domain.ai import AIInvestigationStatus
 
 
 class IncidentRecord(Base):
@@ -41,6 +42,11 @@ class EvidenceRecord(Base):
     incident_id: Mapped[int] = mapped_column(ForeignKey("incidents.id"), index=True)
     source: Mapped[str] = mapped_column(String(100))
     resource: Mapped[str] = mapped_column(String(100))
+    origin: Mapped[InvestigationOrigin] = mapped_column(
+        Enum(InvestigationOrigin, native_enum=False),
+        default=InvestigationOrigin.DETERMINISTIC,
+        index=True,
+    )
     payload: Mapped[dict] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
@@ -54,10 +60,38 @@ class InvestigationStepRecord(Base):
     incident_id: Mapped[int] = mapped_column(ForeignKey("incidents.id"), index=True)
     tool: Mapped[str] = mapped_column(String(100))
     target_resource: Mapped[str] = mapped_column(String(100))
+    origin: Mapped[InvestigationOrigin] = mapped_column(
+        Enum(InvestigationOrigin, native_enum=False),
+        default=InvestigationOrigin.DETERMINISTIC,
+        index=True,
+    )
+    arguments: Mapped[dict] = mapped_column(JSON, default=dict)
     status: Mapped[InvestigationStepStatus] = mapped_column(
         Enum(InvestigationStepStatus, native_enum=False), index=True
     )
     result: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class AIInvestigationRecord(Base):
+    __tablename__ = "ai_investigations"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    incident_id: Mapped[int] = mapped_column(
+        ForeignKey("incidents.id"), unique=True, index=True
+    )
+    mode: Mapped[str] = mapped_column(String(20), default="ai")
+    status: Mapped[AIInvestigationStatus] = mapped_column(
+        Enum(AIInvestigationStatus, native_enum=False), index=True
+    )
+    model: Mapped[str] = mapped_column(String(100))
+    response_id: Mapped[str | None] = mapped_column(String(200))
+    result: Mapped[dict | None] = mapped_column(JSON)
+    usage: Mapped[dict] = mapped_column(JSON, default=dict)
+    error: Mapped[dict | None] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

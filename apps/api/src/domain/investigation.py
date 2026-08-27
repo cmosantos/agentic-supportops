@@ -12,6 +12,13 @@ class ToolErrorCode(StrEnum):
     SERVICE_NOT_FOUND = "service_not_found"
     APPLICATION_NOT_FOUND = "application_not_found"
     INVALID_ARGUMENT = "invalid_argument"
+    UNKNOWN_TOOL = "unknown_tool"
+    MALFORMED_ARGUMENTS = "malformed_arguments"
+
+
+class InvestigationOrigin(StrEnum):
+    DETERMINISTIC = "deterministic"
+    AI = "ai"
 
 
 class ToolError(BaseModel):
@@ -42,6 +49,7 @@ class EvidenceRead(BaseModel):
     incident_id: int
     source: str
     resource: str
+    origin: InvestigationOrigin
     payload: dict[str, Any]
     created_at: datetime
 
@@ -53,6 +61,8 @@ class InvestigationStepRead(BaseModel):
     incident_id: int
     tool: str
     target_resource: str
+    origin: InvestigationOrigin
+    arguments: dict[str, Any]
     status: InvestigationStepStatus
     result: dict[str, Any]
     created_at: datetime
@@ -64,4 +74,3 @@ class InvestigationRead(BaseModel):
     catalog_id: str | None
     steps: list[InvestigationStepRead]
     evidence: list[EvidenceRead]
-

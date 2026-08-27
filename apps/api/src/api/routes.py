@@ -3,13 +3,18 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
-from api.dependencies import get_db_session
+from api.dependencies import get_db_session, get_responses_gateway
+from core.config import settings
+from domain.ai import AIInvestigationExecution
 from db.models import IncidentRecord
 from domain.incident import IncidentCreate, IncidentRead
 from domain.investigation import EvidenceRead, InvestigationRead
 from repositories.incident_repository import IncidentRepository
 from repositories.investigation_repository import InvestigationRepository
 from services.incident_service import IncidentService
+from integrations.responses_gateway import ResponsesGateway
+from services.ai_investigation_service import AIInvestigationError, AIInvestigationService
+from services.tool_registry import InvestigationToolRegistry
 from services.investigation_service import (
     InvalidInvestigationContextError,
     InvestigationService,
@@ -18,6 +23,7 @@ from services.investigation_service import (
 
 router = APIRouter()
 DatabaseSession = Annotated[Session, Depends(get_db_session)]
+ResponsesClientDependency = Annotated[ResponsesGateway | None, Depends(get_responses_gateway)]
 
 
 @router.get("/health")
@@ -70,6 +76,62 @@ def get_incident_investigation(
 ) -> InvestigationRead:
     incident = _incident_or_404(incident_id, session)
     return InvestigationService(InvestigationRepository(session)).get_investigation(incident)
+
+
+@router.get("/ai/config")
+def get_ai_configuration() -> dict[str, str | bool]:
+    return {"configured": bool(settings.openai_api_key), "model": settings.openai_model}
+
+
+@router.post("/incidents/{incident_id}/investigate-ai", response_model=AIInvestigationExecution)
+def investigate_incident_with_ai(
+    incident_id: str,
+    session: DatabaseSession,
+    gateway: ResponsesClientDependency,
+) -> AIInvestigationExecution:
+    incident = _incident_or_404(incident_id, session)
+    if gateway is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"code": "ai_not_configured", "message": "OpenAI is not configured"},
+        )
+    service = AIInvestigationService(
+        repository=InvestigationRepository(session),
+        tools=InvestigationToolRegistry(),
+        gateway=gateway,
+        max_response_iterations=settings.ai_max_response_iterations,
+        max_tool_calls=settings.ai_max_tool_calls,
+        max_identical_tool_calls=settings.ai_max_identical_tool_calls,
+    )
+    try:
+        return service.investigate(incident)
+    except AIInvestigationError as error:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={"code": error.code, "message": str(error)},
+        ) from error
+
+
+@router.get("/incidents/{incident_id}/ai-investigation", response_model=AIInvestigationExecution)
+def get_incident_ai_investigation(
+    incident_id: str, session: DatabaseSession
+) -> AIInvestigationExecution:
+    incident = _incident_or_404(incident_id, session)
+    service = AIInvestigationService(
+        repository=InvestigationRepository(session),
+        tools=InvestigationToolRegistry(),
+        gateway=None,
+        max_response_iterations=settings.ai_max_response_iterations,
+        max_tool_calls=settings.ai_max_tool_calls,
+        max_identical_tool_calls=settings.ai_max_identical_tool_calls,
+    )
+    execution = service.get_latest(incident.id)
+    if execution is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "ai_investigation_not_found", "message": "AI investigation not found"},
+        )
+    return execution
 
 
 def _incident_or_404(incident_id: str, session: Session) -> IncidentRecord:

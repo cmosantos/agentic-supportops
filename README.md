@@ -4,22 +4,23 @@ Agentic SupportOps is an IT Support and Operations platform being built incremen
 
 ## Current scope
 
-Missions 01–03 provide the application baseline, a deterministic fictional Contoso environment, and plain Python investigation tools. The application can seed incidents, execute predefined investigations, and persist factual evidence and execution steps.
+Missions 01–04 provide the application baseline, a deterministic fictional Contoso environment, plain Python investigation tools, and optional AI-guided investigation through the OpenAI Responses API. The application can seed incidents, execute predefined or model-guided investigations, and persist factual evidence and execution steps.
 
-There is no AI, agent, MCP, RAG, authentication, background processing, cloud integration, or access to real infrastructure.
+AI investigation is disabled unless `OPENAI_API_KEY` is configured. There is no MCP, Agents SDK, RAG, approval workflow, OpenTelemetry, authentication, background processing, cloud integration, or access to real infrastructure.
 
 ## Architecture
 
-The React application calls the FastAPI API. Incident routes use application services and SQLAlchemy repositories. Deterministic investigations use declarative playbooks to invoke normal Python tools, which read typed fixture data through the simulation repository. Tool results become persisted evidence and investigation steps.
+The React application calls the FastAPI API. Incident routes use application services and SQLAlchemy repositories. Deterministic investigations use declarative playbooks; optional AI investigations use an isolated Responses API gateway for tool calling. Both paths invoke the same provider-independent Python tools, which read typed fixture data through the simulation repository. Tool results become persisted evidence and investigation steps.
 
 ```text
-React/Vite -> FastAPI -> Investigation service -> Investigation tools
-                                   |                    |
-                                   v                    v
-                           Evidence/steps        Contoso fixture
-                                   |
-                                   v
-                           SQLAlchemy/SQLite
+React/Vite -> FastAPI -> Deterministic service -> Investigation tools
+                    \-> AI service -> Responses gateway -/
+                              |                 |
+                              v                 v
+                       Evidence/steps    OpenAI Responses API
+                              |
+                              v
+                       SQLAlchemy/SQLite
 ```
 
 ## Repository structure
@@ -62,6 +63,8 @@ python -m uvicorn main:app --app-dir .\apps\api\src --reload
 ```
 
 The API is available at `http://localhost:8000` and OpenAPI documentation at `http://localhost:8000/docs`. On a new database, the application creates `data/agentic_supportops.db` and seeds the 25 catalog incidents automatically.
+
+AI investigation is optional. Set `OPENAI_API_KEY` in the process environment or repository-root `.env.local` to enable it. Process environment variables take precedence over `.env.local`. The deterministic API remains available without a key.
 
 Run backend tests:
 
@@ -117,6 +120,9 @@ No frontend test runner is included because the current UI remains a thin integr
 | `POST` | `/incidents/{incident_id}/investigate` | Run its deterministic playbook |
 | `GET` | `/incidents/{incident_id}/evidence` | Retrieve persisted factual evidence |
 | `GET` | `/incidents/{incident_id}/investigation` | Retrieve evidence and execution steps |
+| `GET` | `/ai/config` | Report whether optional AI investigation is configured |
+| `POST` | `/incidents/{incident_id}/investigate-ai` | Run an AI-guided investigation through read-only tools |
+| `GET` | `/incidents/{incident_id}/ai-investigation` | Retrieve the latest persisted AI investigation |
 
 Routes accept either the numeric database ID or catalog references such as `INC-002`. Unknown resources and unsupported investigations return structured errors.
 
@@ -124,11 +130,8 @@ Routes accept either the numeric database ID or catalog references such as `INC-
 
 The fixture models users, account state, groups, licenses, mailboxes and permissions, workstations, network configuration, services, hosts, alerts, metrics, and applications. It intentionally combines healthy resources with known failure states. See [the simulation reference](docs/simulation.md) for the incident and tool catalogs.
 
-Evidence contains observed tool payloads only. Investigation steps record tool, target, status, result, and timestamps. Neither represents a diagnosis.
+Evidence contains observed tool payloads only. Investigation steps record origin, tool, arguments, target, status, result, and timestamps. The tools are read-only and deterministic in both investigation modes. Evidence and steps do not themselves represent a diagnosis.
 
 ## Roadmap
 
-Future missions may incrementally add the OpenAI Responses API, model tool calling over these existing capabilities, MCP exposure, the OpenAI Agents SDK, RAG and knowledge sources, state and memory, human approval, guardrails, tracing, OpenTelemetry, and real infrastructure adapters.
-
-The intended progression is Responses API → tool calling → MCP → Agents SDK. None of those layers exists yet.
-
+Mission 04 adds optional OpenAI Responses API tool calling over the existing deterministic capabilities. Future missions may incrementally add MCP exposure, the OpenAI Agents SDK, RAG and knowledge sources, state and memory, human approval, guardrails, tracing, OpenTelemetry, and real infrastructure adapters. Those later layers do not exist yet.

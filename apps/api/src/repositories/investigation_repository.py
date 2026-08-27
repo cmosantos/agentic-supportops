@@ -3,22 +3,41 @@ from datetime import datetime, timezone
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
-from db.models import EvidenceRecord, InvestigationStepRecord
-from domain.investigation import InvestigationStepStatus, ToolResult
+from db.models import AIInvestigationRecord, EvidenceRecord, InvestigationStepRecord
+from domain.ai import AIInvestigationResult, AIInvestigationStatus, ProviderUsage
+from domain.investigation import InvestigationOrigin, InvestigationStepStatus, ToolResult
 
 
 class InvestigationRepository:
     def __init__(self, session: Session) -> None:
         self._session = session
 
-    def replace_start(self, incident_id: int) -> None:
-        self._session.execute(delete(EvidenceRecord).where(EvidenceRecord.incident_id == incident_id))
+    def replace_start(
+        self,
+        incident_id: int,
+        origin: InvestigationOrigin = InvestigationOrigin.DETERMINISTIC,
+    ) -> None:
         self._session.execute(
-            delete(InvestigationStepRecord).where(InvestigationStepRecord.incident_id == incident_id)
+            delete(EvidenceRecord).where(
+                EvidenceRecord.incident_id == incident_id,
+                EvidenceRecord.origin == origin,
+            )
+        )
+        self._session.execute(
+            delete(InvestigationStepRecord).where(
+                InvestigationStepRecord.incident_id == incident_id,
+                InvestigationStepRecord.origin == origin,
+            )
         )
         self._session.commit()
 
-    def record_result(self, incident_id: int, result: ToolResult) -> None:
+    def record_result(
+        self,
+        incident_id: int,
+        result: ToolResult,
+        origin: InvestigationOrigin = InvestigationOrigin.DETERMINISTIC,
+        arguments: dict | None = None,
+    ) -> None:
         status = (
             InvestigationStepStatus.COMPLETED
             if result.success
@@ -30,6 +49,8 @@ class InvestigationRepository:
                 incident_id=incident_id,
                 tool=result.tool,
                 target_resource=result.resource,
+                origin=origin,
+                arguments=arguments or {},
                 status=status,
                 result=payload,
                 completed_at=datetime.now(timezone.utc),
@@ -41,23 +62,93 @@ class InvestigationRepository:
                     incident_id=incident_id,
                     source=result.tool,
                     resource=result.resource,
+                    origin=origin,
                     payload=result.data or {},
                 )
             )
         self._session.commit()
 
-    def list_evidence(self, incident_id: int) -> list[EvidenceRecord]:
+    def list_evidence(
+        self,
+        incident_id: int,
+        origin: InvestigationOrigin = InvestigationOrigin.DETERMINISTIC,
+    ) -> list[EvidenceRecord]:
         statement = (
             select(EvidenceRecord)
-            .where(EvidenceRecord.incident_id == incident_id)
+            .where(
+                EvidenceRecord.incident_id == incident_id,
+                EvidenceRecord.origin == origin,
+            )
             .order_by(EvidenceRecord.id)
         )
         return list(self._session.scalars(statement))
 
-    def list_steps(self, incident_id: int) -> list[InvestigationStepRecord]:
+    def list_steps(
+        self,
+        incident_id: int,
+        origin: InvestigationOrigin = InvestigationOrigin.DETERMINISTIC,
+    ) -> list[InvestigationStepRecord]:
         statement = (
             select(InvestigationStepRecord)
-            .where(InvestigationStepRecord.incident_id == incident_id)
+            .where(
+                InvestigationStepRecord.incident_id == incident_id,
+                InvestigationStepRecord.origin == origin,
+            )
             .order_by(InvestigationStepRecord.id)
         )
         return list(self._session.scalars(statement))
+
+    def start_ai_run(self, incident_id: int, model: str) -> AIInvestigationRecord:
+        existing = self._session.scalar(
+            select(AIInvestigationRecord).where(AIInvestigationRecord.incident_id == incident_id)
+        )
+        if existing is not None:
+            self._session.delete(existing)
+            self._session.flush()
+        record = AIInvestigationRecord(
+            incident_id=incident_id,
+            status=AIInvestigationStatus.RUNNING,
+            model=model,
+            usage=ProviderUsage().model_dump(),
+        )
+        self._session.add(record)
+        self._session.commit()
+        self._session.refresh(record)
+        return record
+
+    def complete_ai_run(
+        self,
+        record: AIInvestigationRecord,
+        result: AIInvestigationResult,
+        response_id: str,
+        usage: ProviderUsage,
+    ) -> AIInvestigationRecord:
+        record.status = result.status
+        record.result = result.model_dump(mode="json")
+        record.response_id = response_id
+        record.usage = usage.model_dump()
+        record.error = None
+        record.completed_at = datetime.now(timezone.utc)
+        self._session.commit()
+        self._session.refresh(record)
+        return record
+
+    def fail_ai_run(
+        self,
+        record: AIInvestigationRecord,
+        code: str,
+        message: str,
+        response_id: str | None = None,
+        usage: ProviderUsage | None = None,
+    ) -> None:
+        record.status = AIInvestigationStatus.FAILED
+        record.response_id = response_id
+        record.usage = (usage or ProviderUsage()).model_dump()
+        record.error = {"code": code, "message": message}
+        record.completed_at = datetime.now(timezone.utc)
+        self._session.commit()
+
+    def get_ai_run(self, incident_id: int) -> AIInvestigationRecord | None:
+        return self._session.scalar(
+            select(AIInvestigationRecord).where(AIInvestigationRecord.incident_id == incident_id)
+        )

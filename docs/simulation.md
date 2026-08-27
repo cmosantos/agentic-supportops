@@ -41,16 +41,16 @@ All return the same typed `ToolResult` envelope with tool name, resource, succes
 ## Architectural boundary
 
 ```text
-Future AI or MCP layer (not implemented)
-                 |
-                 v
-        Investigation tools
-                 |
-                 v
-      Simulation repository
-                 |
-                 v
-        Typed local fixture
+Deterministic playbooks or optional AI investigation
+                         |
+                         v
+                Investigation tools
+                         |
+                         v
+              Simulation repository
+                         |
+                         v
+                Typed local fixture
 ```
 
-The tools contain no prompt, LLM, MCP, or vendor-specific types. A future MCP server can wrap the same methods, and a future real provider can replace simulation access without duplicating investigation logic.
+The tools contain no prompt, LLM, MCP, or vendor-specific types. Mission 04 keeps OpenAI Responses API integration behind a gateway and passes only validated function calls into these tools. MCP, Agents SDK, RAG, approval workflows, and OpenTelemetry are not implemented.
