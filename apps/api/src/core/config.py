@@ -47,6 +47,18 @@ class Settings:
     ai_max_output_tokens: int = field(
         default_factory=lambda: int(os.getenv("AI_MAX_OUTPUT_TOKENS", "2000"))
     )
+    otel_enabled: bool = field(
+        default_factory=lambda: os.getenv("OTEL_ENABLED", "false").lower()
+        in {"1", "true", "yes", "on"}
+    )
+    otel_service_name: str = field(
+        default_factory=lambda: os.getenv(
+            "OTEL_SERVICE_NAME", "agentic-supportops"
+        )
+    )
+    otel_exporter: str = field(
+        default_factory=lambda: os.getenv("OTEL_EXPORTER", "none").lower()
+    )
 
 
 settings = Settings()

@@ -2,6 +2,7 @@ from typing import Any
 
 from domain.ai import InvestigationEventType, InvestigationRuntime
 from repositories.investigation_repository import InvestigationRepository
+from observability.tracing import TraceBoundary
 
 
 class InvestigationEventRecorder:
@@ -20,6 +21,10 @@ class InvestigationEventRecorder:
         if fields.get("duration_ms") is not None:
             fields["duration_ms"] = max(0.0, fields["duration_ms"])
         fields.setdefault("metadata", {})
+        fields["metadata"] = {
+            **fields["metadata"],
+            **TraceBoundary.current_ids(),
+        }
         self._repository.record_event(
             self._investigation_id,
             self._runtime,

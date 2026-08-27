@@ -18,6 +18,7 @@ from repositories.investigation_repository import InvestigationRepository
 from services.ai_investigation_service import AIInvestigationError
 from services.tool_registry import InvestigationToolRegistry
 from services.investigation_event_recorder import InvestigationEventRecorder
+from observability.tracing import TraceBoundary
 
 
 AGENTS_SDK_MODE = "agents_sdk"
@@ -35,6 +36,7 @@ class AgentsSDKInvestigationService:
         max_identical_tool_calls: int,
         max_output_tokens: int,
         timeout_seconds: float,
+        tracing: TraceBoundary | None = None,
     ) -> None:
         self._repository = repository
         self._tools = tools
@@ -45,8 +47,29 @@ class AgentsSDKInvestigationService:
         self._max_identical_tool_calls = max_identical_tool_calls
         self._max_output_tokens = max_output_tokens
         self._timeout_seconds = timeout_seconds
+        self._tracing = tracing or TraceBoundary()
 
     def investigate(self, incident: IncidentRecord) -> AIInvestigationExecution:
+        with self._tracing.span(
+            "supportops.investigation",
+            {
+                "supportops.incident_reference": incident.catalog_id
+                or str(incident.id),
+                "supportops.runtime": InvestigationRuntime.AGENTS_SDK.value,
+                "supportops.model": self._model_name,
+            },
+        ) as span:
+            execution = self._investigate(incident)
+            span.set_attribute(
+                "supportops.investigation_id", execution.investigation.id
+            )
+            span.set_attribute(
+                "supportops.investigation.status",
+                execution.investigation.status.value,
+            )
+            return execution
+
+    def _investigate(self, incident: IncidentRecord) -> AIInvestigationExecution:
         if self._model is None:
             raise AIInvestigationError("ai_not_configured", "OpenAI is not configured")
         self._repository.replace_start(incident.id, InvestigationOrigin.AGENTS_SDK)
@@ -71,6 +94,7 @@ class AgentsSDKInvestigationService:
             max_tool_calls=self._max_tool_calls,
             max_identical_tool_calls=self._max_identical_tool_calls,
             events=events,
+            tracing=self._tracing,
         )
         observable_model = ObservableAgentsModel(
             self._model, self._model_name, events, context

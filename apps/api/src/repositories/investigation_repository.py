@@ -6,11 +6,15 @@ from sqlalchemy.orm import Session
 from db.models import AIInvestigationRecord, EvidenceRecord, InvestigationEventRecord, InvestigationStepRecord
 from domain.ai import AIInvestigationResult, AIInvestigationStatus, InvestigationEventType, InvestigationRuntime, ProviderUsage
 from domain.investigation import InvestigationOrigin, InvestigationStepStatus, ToolResult
+from observability.tracing import TraceBoundary
 
 
 class InvestigationRepository:
-    def __init__(self, session: Session) -> None:
+    def __init__(
+        self, session: Session, tracing: TraceBoundary | None = None
+    ) -> None:
         self._session = session
+        self._tracing = tracing or TraceBoundary()
 
     def replace_start(
         self,
@@ -37,6 +41,23 @@ class InvestigationRepository:
         result: ToolResult,
         origin: InvestigationOrigin = InvestigationOrigin.DETERMINISTIC,
         arguments: dict | None = None,
+    ) -> None:
+        with self._tracing.span(
+            "supportops.persistence.write",
+            {
+                "supportops.persistence.operation": "record_tool_result",
+                "supportops.incident_id": incident_id,
+                "supportops.tool.name": result.tool,
+            },
+        ):
+            self._record_result(incident_id, result, origin, arguments)
+
+    def _record_result(
+        self,
+        incident_id: int,
+        result: ToolResult,
+        origin: InvestigationOrigin,
+        arguments: dict | None,
     ) -> None:
         status = (
             InvestigationStepStatus.COMPLETED
@@ -101,6 +122,21 @@ class InvestigationRepository:
     def start_ai_run(
         self, incident_id: int, model: str, mode: str = "ai"
     ) -> AIInvestigationRecord:
+        with self._tracing.span(
+            "supportops.persistence.write",
+            {
+                "supportops.persistence.operation": "start_investigation",
+                "supportops.incident_id": incident_id,
+                "supportops.runtime": (
+                    "agents_sdk" if mode == "agents_sdk" else "manual_responses"
+                ),
+            },
+        ):
+            return self._start_ai_run(incident_id, model, mode)
+
+    def _start_ai_run(
+        self, incident_id: int, model: str, mode: str
+    ) -> AIInvestigationRecord:
         existing = self._session.scalar(
             select(AIInvestigationRecord).where(
                 AIInvestigationRecord.incident_id == incident_id,
@@ -136,6 +172,22 @@ class InvestigationRepository:
         response_id: str | None,
         usage: ProviderUsage,
     ) -> AIInvestigationRecord:
+        with self._tracing.span(
+            "supportops.persistence.write",
+            {
+                "supportops.persistence.operation": "complete_investigation",
+                "supportops.investigation_id": record.id,
+            },
+        ):
+            return self._complete_ai_run(record, result, response_id, usage)
+
+    def _complete_ai_run(
+        self,
+        record: AIInvestigationRecord,
+        result: AIInvestigationResult,
+        response_id: str | None,
+        usage: ProviderUsage,
+    ) -> AIInvestigationRecord:
         record.status = result.status
         record.result = result.model_dump(mode="json")
         record.response_id = response_id
@@ -153,6 +205,23 @@ class InvestigationRepository:
         message: str,
         response_id: str | None = None,
         usage: ProviderUsage | None = None,
+    ) -> None:
+        with self._tracing.span(
+            "supportops.persistence.write",
+            {
+                "supportops.persistence.operation": "fail_investigation",
+                "supportops.investigation_id": record.id,
+            },
+        ):
+            self._fail_ai_run(record, code, message, response_id, usage)
+
+    def _fail_ai_run(
+        self,
+        record: AIInvestigationRecord,
+        code: str,
+        message: str,
+        response_id: str | None,
+        usage: ProviderUsage | None,
     ) -> None:
         record.status = AIInvestigationStatus.FAILED
         record.response_id = response_id
@@ -203,10 +272,19 @@ class InvestigationRepository:
         return (current or 0) + 1
 
     def list_events(self, investigation_id: int) -> list[InvestigationEventRecord]:
-        return list(
-            self._session.scalars(
-                select(InvestigationEventRecord)
-                .where(InvestigationEventRecord.investigation_id == investigation_id)
-                .order_by(InvestigationEventRecord.sequence)
+        with self._tracing.span(
+            "supportops.persistence.read",
+            {
+                "supportops.persistence.operation": "load_timeline",
+                "supportops.investigation_id": investigation_id,
+            },
+        ):
+            return list(
+                self._session.scalars(
+                    select(InvestigationEventRecord)
+                    .where(
+                        InvestigationEventRecord.investigation_id == investigation_id
+                    )
+                    .order_by(InvestigationEventRecord.sequence)
+                )
             )
-        )

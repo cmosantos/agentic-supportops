@@ -9,6 +9,10 @@ from db.session import SessionLocal
 from core.config import settings
 from integrations.responses_gateway import ResponsesGateway
 from services.tool_registry import InvestigationToolRegistry
+from observability.tracing import TraceBoundary, build_trace_boundary
+
+
+trace_boundary = build_trace_boundary(settings)
 
 
 def get_db_session() -> Generator[Session, None, None]:
@@ -45,3 +49,7 @@ def get_agents_sdk_model() -> Model | None:
         model=settings.openai_model,
         openai_client=client,
     )
+
+
+def get_trace_boundary() -> TraceBoundary:
+    return trace_boundary

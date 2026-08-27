@@ -25,6 +25,7 @@ from integrations.responses_gateway import ResponsesProviderError
 from repositories.investigation_repository import InvestigationRepository
 from services.tool_registry import InvestigationToolRegistry
 from services.investigation_event_recorder import InvestigationEventRecorder
+from observability.tracing import TraceBoundary
 
 
 class ResponsesClient(Protocol):
@@ -52,6 +53,7 @@ class AIInvestigationService:
         max_response_iterations: int,
         max_tool_calls: int,
         max_identical_tool_calls: int,
+        tracing: TraceBoundary | None = None,
     ) -> None:
         self._repository = repository
         self._tools = tools
@@ -59,8 +61,27 @@ class AIInvestigationService:
         self._max_response_iterations = max_response_iterations
         self._max_tool_calls = max_tool_calls
         self._max_identical_tool_calls = max_identical_tool_calls
+        self._tracing = tracing or TraceBoundary()
 
     def investigate(self, incident: IncidentRecord) -> AIInvestigationExecution:
+        attributes = {
+            "supportops.incident_reference": incident.catalog_id or str(incident.id),
+            "supportops.runtime": InvestigationRuntime.MANUAL_RESPONSES.value,
+        }
+        if self._gateway is not None:
+            attributes["supportops.model"] = self._gateway.model
+        with self._tracing.span("supportops.investigation", attributes) as span:
+            execution = self._investigate(incident)
+            span.set_attribute(
+                "supportops.investigation_id", execution.investigation.id
+            )
+            span.set_attribute(
+                "supportops.investigation.status",
+                execution.investigation.status.value,
+            )
+            return execution
+
+    def _investigate(self, incident: IncidentRecord) -> AIInvestigationExecution:
         if self._gateway is None:
             raise AIInvestigationError("ai_not_configured", "OpenAI is not configured")
         self._repository.replace_start(incident.id, InvestigationOrigin.AI)
@@ -98,42 +119,61 @@ class AIInvestigationService:
                     repeated_calls[signature] += 1
                     if repeated_calls[signature] > self._max_identical_tool_calls:
                         raise AIInvestigationError("ai_repeated_call_limit", "Repeated identical tool-call limit reached")
-                    tool_started = monotonic()
-                    events.record(
-                        InvestigationEventType.TOOL_STARTED,
-                        model_turn=iterations,
-                        tool_name=call.name,
-                        tool_call_id=call.call_id,
-                        status="running",
-                    )
-                    try:
-                        arguments, result = self._tools.dispatch(call.name, call.arguments)
-                    except Exception:
+                    with self._tracing.span(
+                        "supportops.tool.execute",
+                        {
+                            "supportops.runtime": InvestigationRuntime.MANUAL_RESPONSES.value,
+                            "supportops.tool.name": call.name,
+                            "supportops.tool.call_id": call.call_id,
+                            "supportops.model_turn": iterations,
+                        },
+                    ) as tool_span:
+                        tool_started = monotonic()
                         events.record(
-                            InvestigationEventType.TOOL_FAILED,
+                            InvestigationEventType.TOOL_STARTED,
                             model_turn=iterations,
                             tool_name=call.name,
                             tool_call_id=call.call_id,
-                            status="failed",
+                            status="running",
+                        )
+                        try:
+                            arguments, result = self._tools.dispatch(
+                                call.name, call.arguments
+                            )
+                        except Exception:
+                            events.record(
+                                InvestigationEventType.TOOL_FAILED,
+                                model_turn=iterations,
+                                tool_name=call.name,
+                                tool_call_id=call.call_id,
+                                status="failed",
+                                duration_ms=(monotonic() - tool_started) * 1000,
+                            )
+                            raise
+                        for key, value in self._tracing.safe_resource_attributes(
+                            arguments
+                        ).items():
+                            tool_span.set_attribute(key, value)
+                        self._repository.record_result(
+                            incident.id,
+                            result,
+                            origin=InvestigationOrigin.AI,
+                            arguments=arguments,
+                        )
+                        tool_status = "completed" if result.success else "failed"
+                        tool_span.set_attribute(
+                            "supportops.tool.status", tool_status
+                        )
+                        events.record(
+                            InvestigationEventType.TOOL_COMPLETED if result.success else InvestigationEventType.TOOL_FAILED,
+                            model_turn=iterations,
+                            tool_name=call.name,
+                            tool_call_id=call.call_id,
+                            arguments=arguments,
+                            result_summary=f"{result.tool} returned {'evidence' if result.success else 'an application error'} for {result.resource}",
+                            status=tool_status,
                             duration_ms=(monotonic() - tool_started) * 1000,
                         )
-                        raise
-                    self._repository.record_result(
-                        incident.id,
-                        result,
-                        origin=InvestigationOrigin.AI,
-                        arguments=arguments,
-                    )
-                    events.record(
-                        InvestigationEventType.TOOL_COMPLETED if result.success else InvestigationEventType.TOOL_FAILED,
-                        model_turn=iterations,
-                        tool_name=call.name,
-                        tool_call_id=call.call_id,
-                        arguments=arguments,
-                        result_summary=f"{result.tool} returned {'evidence' if result.success else 'an application error'} for {result.resource}",
-                        status="completed" if result.success else "failed",
-                        duration_ms=(monotonic() - tool_started) * 1000,
-                    )
                     outputs.append(
                         FunctionCallOutput(
                             call_id=call.call_id,
@@ -255,50 +295,68 @@ class AIInvestigationService:
             runtime="manual_responses",
         )
 
-    @staticmethod
     def _model_turn(
+        self,
         events: InvestigationEventRecorder,
         model_turn: int,
         invoke,
     ) -> ResponsesTurn:
-        events.record(
-            InvestigationEventType.MODEL_TURN_STARTED,
-            model_turn=model_turn,
-            status="running",
-        )
-        started = monotonic()
-        try:
-            turn = invoke()
-        except Exception:
+        with self._tracing.span(
+            "supportops.model.turn",
+            {
+                "supportops.runtime": InvestigationRuntime.MANUAL_RESPONSES.value,
+                "supportops.model": self._gateway.model,
+                "supportops.model_turn": model_turn,
+            },
+        ) as model_span:
+            events.record(
+                InvestigationEventType.MODEL_TURN_STARTED,
+                model_turn=model_turn,
+                status="running",
+            )
+            started = monotonic()
+            try:
+                turn = invoke()
+            except Exception:
+                events.record(
+                    InvestigationEventType.MODEL_TURN_COMPLETED,
+                    model_turn=model_turn,
+                    status="failed",
+                    duration_ms=(monotonic() - started) * 1000,
+                )
+                raise
+            for call in turn.function_calls:
+                try:
+                    arguments = json.loads(call.arguments)
+                except json.JSONDecodeError:
+                    arguments = None
+                events.record(
+                    InvestigationEventType.TOOL_REQUESTED,
+                    model_turn=model_turn,
+                    tool_name=call.name,
+                    tool_call_id=call.call_id,
+                    arguments=arguments,
+                    status="requested",
+                )
+            model_span.set_attribute("supportops.response_id", turn.response_id)
+            model_span.set_attribute(
+                "supportops.input_tokens", turn.usage.input_tokens
+            )
+            model_span.set_attribute(
+                "supportops.output_tokens", turn.usage.output_tokens
+            )
+            model_span.set_attribute(
+                "supportops.total_tokens", turn.usage.total_tokens
+            )
             events.record(
                 InvestigationEventType.MODEL_TURN_COMPLETED,
                 model_turn=model_turn,
-                status="failed",
+                response_id=turn.response_id,
+                model=turn.model,
+                input_tokens=turn.usage.input_tokens,
+                output_tokens=turn.usage.output_tokens,
+                total_tokens=turn.usage.total_tokens,
                 duration_ms=(monotonic() - started) * 1000,
+                status="completed",
             )
-            raise
-        for call in turn.function_calls:
-            try:
-                arguments = json.loads(call.arguments)
-            except json.JSONDecodeError:
-                arguments = None
-            events.record(
-                InvestigationEventType.TOOL_REQUESTED,
-                model_turn=model_turn,
-                tool_name=call.name,
-                tool_call_id=call.call_id,
-                arguments=arguments,
-                status="requested",
-            )
-        events.record(
-            InvestigationEventType.MODEL_TURN_COMPLETED,
-            model_turn=model_turn,
-            response_id=turn.response_id,
-            model=turn.model,
-            input_tokens=turn.usage.input_tokens,
-            output_tokens=turn.usage.output_tokens,
-            total_tokens=turn.usage.total_tokens,
-            duration_ms=(monotonic() - started) * 1000,
-            status="completed",
-        )
-        return turn
+            return turn

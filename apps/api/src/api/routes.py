@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from agents import Model
 
-from api.dependencies import get_agents_sdk_model, get_db_session, get_responses_gateway
+from api.dependencies import get_agents_sdk_model, get_db_session, get_responses_gateway, get_trace_boundary
 from core.config import settings
 from domain.ai import AIInvestigationExecution, InvestigationEventRead, InvestigationRuntime
 from db.models import IncidentRecord
@@ -22,11 +22,13 @@ from services.investigation_service import (
     InvestigationService,
     UnsupportedInvestigationError,
 )
+from observability.tracing import TraceBoundary
 
 router = APIRouter()
 DatabaseSession = Annotated[Session, Depends(get_db_session)]
 ResponsesClientDependency = Annotated[ResponsesGateway | None, Depends(get_responses_gateway)]
 AgentsSDKModelDependency = Annotated[Model | None, Depends(get_agents_sdk_model)]
+TraceBoundaryDependency = Annotated[TraceBoundary, Depends(get_trace_boundary)]
 
 
 @router.get("/health")
@@ -91,6 +93,7 @@ def investigate_incident_with_ai(
     incident_id: str,
     session: DatabaseSession,
     gateway: ResponsesClientDependency,
+    tracing: TraceBoundaryDependency,
 ) -> AIInvestigationExecution:
     incident = _incident_or_404(incident_id, session)
     if gateway is None:
@@ -99,20 +102,28 @@ def investigate_incident_with_ai(
             detail={"code": "ai_not_configured", "message": "OpenAI is not configured"},
         )
     service = AIInvestigationService(
-        repository=InvestigationRepository(session),
+        repository=InvestigationRepository(session, tracing),
         tools=InvestigationToolRegistry(),
         gateway=gateway,
         max_response_iterations=settings.ai_max_response_iterations,
         max_tool_calls=settings.ai_max_tool_calls,
         max_identical_tool_calls=settings.ai_max_identical_tool_calls,
+        tracing=tracing,
     )
-    try:
-        return service.investigate(incident)
-    except AIInvestigationError as error:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail={"code": error.code, "message": str(error)},
-        ) from error
+    with tracing.span(
+        "api.investigation.request",
+        {
+            "supportops.incident_reference": incident.catalog_id or incident_id,
+            "supportops.runtime": "manual_responses",
+        },
+    ):
+        try:
+            return service.investigate(incident)
+        except AIInvestigationError as error:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail={"code": error.code, "message": str(error)},
+            ) from error
 
 
 @router.get("/incidents/{incident_id}/ai-investigation", response_model=AIInvestigationExecution)
@@ -145,6 +156,7 @@ def investigate_incident_with_agents_sdk(
     incident_id: str,
     session: DatabaseSession,
     model: AgentsSDKModelDependency,
+    tracing: TraceBoundaryDependency,
 ) -> AIInvestigationExecution:
     incident = _incident_or_404(incident_id, session)
     if model is None:
@@ -152,14 +164,21 @@ def investigate_incident_with_agents_sdk(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail={"code": "ai_not_configured", "message": "OpenAI is not configured"},
         )
-    service = _agents_sdk_service(session, model)
-    try:
-        return service.investigate(incident)
-    except AIInvestigationError as error:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail={"code": error.code, "message": str(error)},
-        ) from error
+    service = _agents_sdk_service(session, model, tracing)
+    with tracing.span(
+        "api.investigation.request",
+        {
+            "supportops.incident_reference": incident.catalog_id or incident_id,
+            "supportops.runtime": "agents_sdk",
+        },
+    ):
+        try:
+            return service.investigate(incident)
+        except AIInvestigationError as error:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail={"code": error.code, "message": str(error)},
+            ) from error
 
 
 @router.get(
@@ -190,10 +209,11 @@ def get_investigation_events(
     incident_id: str,
     runtime: InvestigationRuntime,
     session: DatabaseSession,
+    tracing: TraceBoundaryDependency,
 ) -> list[InvestigationEventRead]:
     incident = _incident_or_404(incident_id, session)
     mode = "ai" if runtime == InvestigationRuntime.MANUAL_RESPONSES else "agents_sdk"
-    repository = InvestigationRepository(session)
+    repository = InvestigationRepository(session, tracing)
     investigation = repository.get_ai_run(incident.id, mode=mode)
     if investigation is None:
         raise HTTPException(
@@ -210,10 +230,11 @@ def get_investigation_events(
 
 
 def _agents_sdk_service(
-    session: Session, model: Model | None
+    session: Session, model: Model | None, tracing: TraceBoundary | None = None
 ) -> AgentsSDKInvestigationService:
+    tracing = tracing or TraceBoundary()
     return AgentsSDKInvestigationService(
-        repository=InvestigationRepository(session),
+        repository=InvestigationRepository(session, tracing),
         tools=InvestigationToolRegistry(),
         model=model,
         model_name=settings.openai_model,
@@ -222,6 +243,7 @@ def _agents_sdk_service(
         max_identical_tool_calls=settings.ai_max_identical_tool_calls,
         max_output_tokens=settings.ai_max_output_tokens,
         timeout_seconds=settings.openai_timeout_seconds,
+        tracing=tracing,
     )
 
 

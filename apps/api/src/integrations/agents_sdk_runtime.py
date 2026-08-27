@@ -12,6 +12,7 @@ from domain.investigation import InvestigationOrigin
 from repositories.investigation_repository import InvestigationRepository
 from services.tool_registry import InvestigationToolRegistry
 from services.investigation_event_recorder import InvestigationEventRecorder
+from observability.tracing import TraceBoundary
 
 
 PROMPT_PATH = Path(__file__).resolve().parents[2] / "prompts" / "ai-investigator.md"
@@ -30,6 +31,7 @@ class AgentsSDKRunContext:
     incident_id: int
     max_tool_calls: int
     max_identical_tool_calls: int
+    tracing: TraceBoundary = field(default_factory=TraceBoundary)
     total_tool_calls: int = 0
     repeated_calls: Counter[str] = field(default_factory=Counter)
     selected_tools: list[str] = field(default_factory=list)
@@ -37,8 +39,29 @@ class AgentsSDKRunContext:
     tool_turns: dict[str, int] = field(default_factory=dict)
 
     def execute(self, name: str, raw_arguments: str, tool_call_id: str | None) -> str:
-        started = monotonic()
         model_turn = self.tool_turns.get(tool_call_id) if tool_call_id else None
+        with self.tracing.span(
+            "supportops.tool.execute",
+            {
+                "supportops.runtime": "agents_sdk",
+                "supportops.tool.name": name,
+                "supportops.tool.call_id": tool_call_id or "unknown",
+                "supportops.model_turn": model_turn or 0,
+            },
+        ) as tool_span:
+            return self._execute(
+                name, raw_arguments, tool_call_id, model_turn, tool_span
+            )
+
+    def _execute(
+        self,
+        name: str,
+        raw_arguments: str,
+        tool_call_id: str | None,
+        model_turn: int | None,
+        tool_span,
+    ) -> str:
+        started = monotonic()
         if self.events:
             self.events.record(
                 InvestigationEventType.TOOL_STARTED,
@@ -91,6 +114,8 @@ class AgentsSDKRunContext:
                     duration_ms=(monotonic() - started) * 1000,
                 )
             raise
+        for key, value in self.tracing.safe_resource_attributes(arguments).items():
+            tool_span.set_attribute(key, value)
         self.repository.record_result(
             self.incident_id,
             result,
@@ -98,6 +123,9 @@ class AgentsSDKRunContext:
             arguments=arguments,
         )
         self.selected_tools.append(name)
+        tool_span.set_attribute(
+            "supportops.tool.status", "completed" if result.success else "failed"
+        )
         if self.events:
             self.events.record(
                 InvestigationEventType.TOOL_COMPLETED if result.success else InvestigationEventType.TOOL_FAILED,
@@ -131,53 +159,67 @@ class ObservableAgentsModel(Model):
     async def get_response(self, *args, **kwargs):
         self._turn += 1
         turn = self._turn
-        self._events.record(
-            InvestigationEventType.MODEL_TURN_STARTED,
-            model_turn=turn,
-            status="running",
-        )
-        started = monotonic()
-        try:
-            response = await self._model.get_response(*args, **kwargs)
-        except Exception:
+        with self._context.tracing.span(
+            "supportops.model.turn",
+            {
+                "supportops.runtime": "agents_sdk",
+                "supportops.model": self._model_name,
+                "supportops.model_turn": turn,
+            },
+        ) as model_span:
+            self._events.record(
+                InvestigationEventType.MODEL_TURN_STARTED,
+                model_turn=turn,
+                status="running",
+            )
+            started = monotonic()
+            try:
+                response = await self._model.get_response(*args, **kwargs)
+            except Exception:
+                self._events.record(
+                    InvestigationEventType.MODEL_TURN_COMPLETED,
+                    model_turn=turn,
+                    status="failed",
+                    duration_ms=(monotonic() - started) * 1000,
+                )
+                raise
+            for item in response.output:
+                if getattr(item, "type", None) != "function_call":
+                    continue
+                call_id = getattr(item, "call_id", None)
+                if call_id:
+                    self._context.tool_turns[call_id] = turn
+                try:
+                    arguments = json.loads(item.arguments)
+                except (json.JSONDecodeError, TypeError):
+                    arguments = None
+                self._events.record(
+                    InvestigationEventType.TOOL_REQUESTED,
+                    model_turn=turn,
+                    tool_name=item.name,
+                    tool_call_id=call_id,
+                    arguments=arguments,
+                    status="requested",
+                )
+            usage = response.usage
+            model_span.set_attribute(
+                "supportops.response_id", response.response_id or "unknown"
+            )
+            model_span.set_attribute("supportops.input_tokens", usage.input_tokens)
+            model_span.set_attribute("supportops.output_tokens", usage.output_tokens)
+            model_span.set_attribute("supportops.total_tokens", usage.total_tokens)
             self._events.record(
                 InvestigationEventType.MODEL_TURN_COMPLETED,
                 model_turn=turn,
-                status="failed",
+                response_id=response.response_id,
+                model=self._model_name,
+                input_tokens=usage.input_tokens,
+                output_tokens=usage.output_tokens,
+                total_tokens=usage.total_tokens,
+                status="completed",
                 duration_ms=(monotonic() - started) * 1000,
             )
-            raise
-        for item in response.output:
-            if getattr(item, "type", None) != "function_call":
-                continue
-            call_id = getattr(item, "call_id", None)
-            if call_id:
-                self._context.tool_turns[call_id] = turn
-            try:
-                arguments = json.loads(item.arguments)
-            except (json.JSONDecodeError, TypeError):
-                arguments = None
-            self._events.record(
-                InvestigationEventType.TOOL_REQUESTED,
-                model_turn=turn,
-                tool_name=item.name,
-                tool_call_id=call_id,
-                arguments=arguments,
-                status="requested",
-            )
-        usage = response.usage
-        self._events.record(
-            InvestigationEventType.MODEL_TURN_COMPLETED,
-            model_turn=turn,
-            response_id=response.response_id,
-            model=self._model_name,
-            input_tokens=usage.input_tokens,
-            output_tokens=usage.output_tokens,
-            total_tokens=usage.total_tokens,
-            status="completed",
-            duration_ms=(monotonic() - started) * 1000,
-        )
-        return response
+            return response
 
     def stream_response(self, *args, **kwargs):
         return self._model.stream_response(*args, **kwargs)

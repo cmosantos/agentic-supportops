@@ -6,7 +6,7 @@ Agentic SupportOps is an IT Support and Operations platform being built incremen
 
 The completed missions provide the application baseline, a deterministic fictional Contoso environment, plain Python investigation tools, optional AI-guided investigation through both the OpenAI Responses API and the OpenAI Agents SDK, and a local execution-event timeline. The application can seed incidents, execute predefined or model-guided investigations, and persist factual evidence, tool execution steps, and provider-neutral orchestration events.
 
-AI investigation is disabled unless `OPENAI_API_KEY` is configured. The validated manual Responses API runtime remains the default AI path; a separate single-agent OpenAI Agents SDK runtime is available for controlled comparison. Agents SDK tracing remains disabled: the local timeline is application-owned and is not exported. There is no MCP integration, RAG, approval workflow, application OpenTelemetry instrumentation, authentication, background processing, cloud integration, or access to real infrastructure.
+AI investigation is disabled unless `OPENAI_API_KEY` is configured. The validated manual Responses API runtime remains the default AI path; a separate single-agent OpenAI Agents SDK runtime is available for controlled comparison. Agents SDK tracing remains disabled. Application-owned OpenTelemetry tracing is available as an opt-in local diagnostic boundary and exports nothing by default. There is no MCP integration, RAG, approval workflow, external tracing backend, authentication, background processing, cloud integration, or access to real infrastructure.
 
 ## Architecture
 
@@ -65,6 +65,16 @@ python -m uvicorn main:app --app-dir .\apps\api\src --reload
 The API is available at `http://localhost:8000` and OpenAPI documentation at `http://localhost:8000/docs`. On a new database, the application creates `data/agentic_supportops.db` and seeds the 25 catalog incidents automatically.
 
 AI investigation is optional. Set `OPENAI_API_KEY` in the process environment or repository-root `.env.local` to enable it. Process environment variables take precedence over `.env.local`. The deterministic API remains available without a key.
+
+OpenTelemetry tracing is also optional and independent of AI configuration:
+
+```text
+OTEL_ENABLED=false
+OTEL_SERVICE_NAME=agentic-supportops
+OTEL_EXPORTER=none
+```
+
+Supported exporters are `none` and the local `console` exporter. Tracing is disabled by default, requires no Collector, and never enables the Agents SDK provider tracing.
 
 Run backend tests:
 
@@ -137,6 +147,15 @@ Evidence contains observed tool payloads only. Investigation steps record origin
 
 Investigation events complement those records with the orchestration timeline: run and model-turn boundaries, tool request/execution boundaries, response identifiers, per-turn token usage, and application-measured durations. Events contain compact metadata rather than raw provider payloads, credentials, headers, or duplicated evidence.
 
+These records have deliberately separate roles:
+
+- `Evidence` stores observed facts.
+- `InvestigationStep` is the application audit of tool execution.
+- `InvestigationEvent` is the persisted SupportOps runtime timeline and remains the domain source of truth.
+- OpenTelemetry spans describe the technical parent/child execution path and latency. They are diagnostic data, not application state.
+
+When tracing is enabled, event metadata may contain the active `trace_id` and `span_id` for correlation. Prompts, evidence payloads, response bodies, credentials, and HTTP headers are not span attributes.
+
 ## Roadmap
 
-Future missions may incrementally evaluate external tracing/OpenTelemetry, MCP exposure, RAG and knowledge sources, state and memory, human approval, guardrails, and real infrastructure adapters. Those layers do not exist yet.
+Future missions may incrementally evaluate a local Collector/export pipeline, MCP exposure, RAG and knowledge sources, state and memory, human approval, guardrails, and real infrastructure adapters. Those layers do not exist yet.
