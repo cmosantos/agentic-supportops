@@ -54,9 +54,18 @@ def ensure_sqlite_schema_compatibility(engine: Engine) -> None:
 
         if "ai_investigations" in tables:
             unique_constraints = inspector.get_unique_constraints("ai_investigations")
-            has_legacy_incident_unique = any(
+            unique_indexes = inspector.get_indexes("ai_investigations")
+            has_legacy_incident_constraint = any(
                 constraint.get("column_names") == ["incident_id"]
                 for constraint in unique_constraints
+            )
+            has_legacy_incident_index = any(
+                bool(index.get("unique"))
+                and index.get("column_names") == ["incident_id"]
+                for index in unique_indexes
+            )
+            has_legacy_incident_unique = (
+                has_legacy_incident_constraint or has_legacy_incident_index
             )
             if has_legacy_incident_unique:
                 connection.execute(
