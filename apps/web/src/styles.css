@@ -54,11 +54,20 @@ h2 { font-size: 1rem; }
 .incident.selected { border-color: #4263eb; background: #edf2ff; }
 .metadata, small { color: #697386; }
 .run { padding: 0.7rem 1rem; border: 0; border-radius: 0.4rem; background: #4263eb; color: white; cursor: pointer; }
-.run:disabled { opacity: 0.6; }
+.run:disabled { opacity: 0.55; cursor: not-allowed; }
+.actions { display: flex; flex-wrap: wrap; gap: 0.6rem; }
+.run.ai { background: #7048e8; }
+.mode { font-weight: 600; text-transform: capitalize; }
+.running { color: #596579; }
 .error { color: #c92a2a; }
 article { margin-top: 1rem; padding: 1rem; border: 1px solid #dfe4ec; border-radius: 0.4rem; }
 article small { display: block; margin-top: 0.25rem; }
 pre { overflow: auto; padding: 0.75rem; background: #f4f6fa; font-size: 0.8rem; }
+.diagnosis { border-color: #b197fc; background: #f8f5ff; }
+.diagnosis-heading { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 0.5rem; }
+.diagnosis-heading small { margin: 0; text-transform: capitalize; }
+.result-section { margin-top: 1rem; }
+.result-section ul { margin-bottom: 0; padding-left: 1.25rem; }
 
 @media (max-width: 760px) {
   .workspace { grid-template-columns: 1fr; }
