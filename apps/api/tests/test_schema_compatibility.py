@@ -67,3 +67,47 @@ def test_fresh_sqlite_database_remains_supported(tmp_path) -> None:
     Base.metadata.create_all(engine)
     assert "ai_investigations" in inspect(engine).get_table_names()
     engine.dispose()
+
+
+def test_legacy_ai_run_uniqueness_becomes_runtime_specific(tmp_path) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'legacy-ai.db'}")
+    with engine.begin() as connection:
+        connection.execute(text("CREATE TABLE incidents (id INTEGER PRIMARY KEY)"))
+        connection.execute(text("INSERT INTO incidents VALUES (19)"))
+        connection.execute(
+            text(
+                "CREATE TABLE ai_investigations ("
+                "id INTEGER PRIMARY KEY, incident_id INTEGER NOT NULL UNIQUE, "
+                "mode VARCHAR(20) NOT NULL, status VARCHAR(21) NOT NULL, "
+                "model VARCHAR(100) NOT NULL, response_id VARCHAR(200), result JSON, "
+                "usage JSON NOT NULL, error JSON, created_at DATETIME NOT NULL, "
+                "completed_at DATETIME)"
+            )
+        )
+        connection.execute(
+            text(
+                "INSERT INTO ai_investigations VALUES "
+                "(1, 19, 'ai', 'COMPLETED', 'gpt-4.1-mini', 'resp-existing', "
+                "NULL, '{}', NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+            )
+        )
+
+    ensure_sqlite_schema_compatibility(engine)
+    ensure_sqlite_schema_compatibility(engine)
+    with engine.begin() as connection:
+        existing = connection.execute(
+            text("SELECT mode, response_id FROM ai_investigations WHERE incident_id=19")
+        ).one()
+        connection.execute(
+            text(
+                "INSERT INTO ai_investigations "
+                "(incident_id, mode, status, model, usage, created_at) VALUES "
+                "(19, 'agents_sdk', 'RUNNING', 'gpt-4.1-mini', '{}', CURRENT_TIMESTAMP)"
+            )
+        )
+        count = connection.execute(
+            text("SELECT COUNT(*) FROM ai_investigations WHERE incident_id=19")
+        ).scalar_one()
+    assert existing == ("ai", "resp-existing")
+    assert count == 2
+    engine.dispose()

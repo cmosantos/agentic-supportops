@@ -19,6 +19,7 @@ class ToolErrorCode(StrEnum):
 class InvestigationOrigin(StrEnum):
     DETERMINISTIC = "deterministic"
     AI = "ai"
+    AGENTS_SDK = "agents_sdk"
 
 
 class ToolError(BaseModel):

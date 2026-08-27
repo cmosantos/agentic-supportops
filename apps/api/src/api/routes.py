@@ -2,8 +2,9 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
+from agents import Model
 
-from api.dependencies import get_db_session, get_responses_gateway
+from api.dependencies import get_agents_sdk_model, get_db_session, get_responses_gateway
 from core.config import settings
 from domain.ai import AIInvestigationExecution
 from db.models import IncidentRecord
@@ -14,6 +15,7 @@ from repositories.investigation_repository import InvestigationRepository
 from services.incident_service import IncidentService
 from integrations.responses_gateway import ResponsesGateway
 from services.ai_investigation_service import AIInvestigationError, AIInvestigationService
+from services.agents_sdk_investigation_service import AgentsSDKInvestigationService
 from services.tool_registry import InvestigationToolRegistry
 from services.investigation_service import (
     InvalidInvestigationContextError,
@@ -24,6 +26,7 @@ from services.investigation_service import (
 router = APIRouter()
 DatabaseSession = Annotated[Session, Depends(get_db_session)]
 ResponsesClientDependency = Annotated[ResponsesGateway | None, Depends(get_responses_gateway)]
+AgentsSDKModelDependency = Annotated[Model | None, Depends(get_agents_sdk_model)]
 
 
 @router.get("/health")
@@ -132,6 +135,67 @@ def get_incident_ai_investigation(
             detail={"code": "ai_investigation_not_found", "message": "AI investigation not found"},
         )
     return execution
+
+
+@router.post(
+    "/incidents/{incident_id}/investigate-agent-sdk",
+    response_model=AIInvestigationExecution,
+)
+def investigate_incident_with_agents_sdk(
+    incident_id: str,
+    session: DatabaseSession,
+    model: AgentsSDKModelDependency,
+) -> AIInvestigationExecution:
+    incident = _incident_or_404(incident_id, session)
+    if model is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"code": "ai_not_configured", "message": "OpenAI is not configured"},
+        )
+    service = _agents_sdk_service(session, model)
+    try:
+        return service.investigate(incident)
+    except AIInvestigationError as error:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={"code": error.code, "message": str(error)},
+        ) from error
+
+
+@router.get(
+    "/incidents/{incident_id}/agent-sdk-investigation",
+    response_model=AIInvestigationExecution,
+)
+def get_incident_agents_sdk_investigation(
+    incident_id: str, session: DatabaseSession
+) -> AIInvestigationExecution:
+    incident = _incident_or_404(incident_id, session)
+    execution = _agents_sdk_service(session, None).get_latest(incident.id)
+    if execution is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "agents_sdk_investigation_not_found",
+                "message": "Agents SDK investigation not found",
+            },
+        )
+    return execution
+
+
+def _agents_sdk_service(
+    session: Session, model: Model | None
+) -> AgentsSDKInvestigationService:
+    return AgentsSDKInvestigationService(
+        repository=InvestigationRepository(session),
+        tools=InvestigationToolRegistry(),
+        model=model,
+        model_name=settings.openai_model,
+        max_turns=settings.ai_max_response_iterations,
+        max_tool_calls=settings.ai_max_tool_calls,
+        max_identical_tool_calls=settings.ai_max_identical_tool_calls,
+        max_output_tokens=settings.ai_max_output_tokens,
+        timeout_seconds=settings.openai_timeout_seconds,
+    )
 
 
 def _incident_or_404(incident_id: str, session: Session) -> IncidentRecord:

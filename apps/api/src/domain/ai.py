@@ -31,6 +31,9 @@ class ProviderUsage(BaseModel):
     output_tokens: int = 0
     total_tokens: int = 0
     response_iterations: int = 0
+    requests: int = 0
+    runtime: str = "manual_responses"
+    final_agent: str | None = None
 
 
 class ProviderFunctionCall(BaseModel):

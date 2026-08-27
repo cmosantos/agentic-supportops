@@ -6,7 +6,7 @@ Agentic SupportOps is an IT Support and Operations platform being built incremen
 
 Missions 01–04 provide the application baseline, a deterministic fictional Contoso environment, plain Python investigation tools, and optional AI-guided investigation through the OpenAI Responses API. The application can seed incidents, execute predefined or model-guided investigations, and persist factual evidence and execution steps.
 
-AI investigation is disabled unless `OPENAI_API_KEY` is configured. There is no MCP, Agents SDK, RAG, approval workflow, OpenTelemetry, authentication, background processing, cloud integration, or access to real infrastructure.
+AI investigation is disabled unless `OPENAI_API_KEY` is configured. The validated manual Responses API runtime remains the default AI path; a separate single-agent OpenAI Agents SDK runtime is available for controlled comparison. There is no MCP integration, RAG, approval workflow, application OpenTelemetry instrumentation, authentication, background processing, cloud integration, or access to real infrastructure.
 
 ## Architecture
 
@@ -122,6 +122,8 @@ No frontend test runner is included because the current UI remains a thin integr
 | `GET` | `/incidents/{incident_id}/investigation` | Retrieve evidence and execution steps |
 | `GET` | `/ai/config` | Report whether optional AI investigation is configured |
 | `POST` | `/incidents/{incident_id}/investigate-ai` | Run an AI-guided investigation through read-only tools |
+| `POST` | `/incidents/{incident_id}/investigate-agent-sdk` | Run the comparative single-agent Agents SDK investigation |
+| `GET` | `/incidents/{incident_id}/agent-sdk-investigation` | Read the latest persisted Agents SDK investigation |
 | `GET` | `/incidents/{incident_id}/ai-investigation` | Retrieve the latest persisted AI investigation |
 
 Routes accept either the numeric database ID or catalog references such as `INC-002`. Unknown resources and unsupported investigations return structured errors.

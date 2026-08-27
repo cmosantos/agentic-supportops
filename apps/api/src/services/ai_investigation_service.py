@@ -156,4 +156,6 @@ class AIInvestigationService:
             output_tokens=current.output_tokens + added.output_tokens,
             total_tokens=current.total_tokens + added.total_tokens,
             response_iterations=current.response_iterations + 1,
+            requests=current.requests + 1,
+            runtime="manual_responses",
         )

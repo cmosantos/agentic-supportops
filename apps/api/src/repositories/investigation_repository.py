@@ -98,18 +98,26 @@ class InvestigationRepository:
         )
         return list(self._session.scalars(statement))
 
-    def start_ai_run(self, incident_id: int, model: str) -> AIInvestigationRecord:
+    def start_ai_run(
+        self, incident_id: int, model: str, mode: str = "ai"
+    ) -> AIInvestigationRecord:
         existing = self._session.scalar(
-            select(AIInvestigationRecord).where(AIInvestigationRecord.incident_id == incident_id)
+            select(AIInvestigationRecord).where(
+                AIInvestigationRecord.incident_id == incident_id,
+                AIInvestigationRecord.mode == mode,
+            )
         )
         if existing is not None:
             self._session.delete(existing)
             self._session.flush()
         record = AIInvestigationRecord(
             incident_id=incident_id,
+            mode=mode,
             status=AIInvestigationStatus.RUNNING,
             model=model,
-            usage=ProviderUsage().model_dump(),
+            usage=ProviderUsage(
+                runtime="agents_sdk" if mode == "agents_sdk" else "manual_responses"
+            ).model_dump(),
         )
         self._session.add(record)
         self._session.commit()
@@ -120,7 +128,7 @@ class InvestigationRepository:
         self,
         record: AIInvestigationRecord,
         result: AIInvestigationResult,
-        response_id: str,
+        response_id: str | None,
         usage: ProviderUsage,
     ) -> AIInvestigationRecord:
         record.status = result.status
@@ -148,7 +156,12 @@ class InvestigationRepository:
         record.completed_at = datetime.now(timezone.utc)
         self._session.commit()
 
-    def get_ai_run(self, incident_id: int) -> AIInvestigationRecord | None:
+    def get_ai_run(
+        self, incident_id: int, mode: str = "ai"
+    ) -> AIInvestigationRecord | None:
         return self._session.scalar(
-            select(AIInvestigationRecord).where(AIInvestigationRecord.incident_id == incident_id)
+            select(AIInvestigationRecord).where(
+                AIInvestigationRecord.incident_id == incident_id,
+                AIInvestigationRecord.mode == mode,
+            )
         )
