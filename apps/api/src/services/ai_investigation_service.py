@@ -155,4 +155,5 @@ class AIInvestigationService:
             input_tokens=current.input_tokens + added.input_tokens,
             output_tokens=current.output_tokens + added.output_tokens,
             total_tokens=current.total_tokens + added.total_tokens,
+            response_iterations=current.response_iterations + 1,
         )

@@ -24,4 +24,7 @@ def get_responses_gateway() -> ResponsesGateway | None:
         api_key=settings.openai_api_key,
         model=settings.openai_model,
         tools=tools.openai_tools,
+        max_retries=settings.openai_max_retries,
+        timeout_seconds=settings.openai_timeout_seconds,
+        max_output_tokens=settings.ai_max_output_tokens,
     )

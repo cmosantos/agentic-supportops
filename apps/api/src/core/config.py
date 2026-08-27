@@ -29,6 +29,12 @@ class Settings:
     openai_model: str = field(
         default_factory=lambda: os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
     )
+    openai_max_retries: int = field(
+        default_factory=lambda: int(os.getenv("OPENAI_MAX_RETRIES", "0"))
+    )
+    openai_timeout_seconds: float = field(
+        default_factory=lambda: float(os.getenv("OPENAI_TIMEOUT_SECONDS", "60"))
+    )
     ai_max_response_iterations: int = field(
         default_factory=lambda: int(os.getenv("AI_MAX_RESPONSE_ITERATIONS", "8"))
     )
@@ -37,6 +43,9 @@ class Settings:
     )
     ai_max_identical_tool_calls: int = field(
         default_factory=lambda: int(os.getenv("AI_MAX_IDENTICAL_TOOL_CALLS", "2"))
+    )
+    ai_max_output_tokens: int = field(
+        default_factory=lambda: int(os.getenv("AI_MAX_OUTPUT_TOKENS", "2000"))
     )
 
 

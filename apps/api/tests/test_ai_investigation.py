@@ -61,6 +61,7 @@ def test_multiple_calls_preserve_call_ids_and_persist_ai_origin(seeded_client: T
     assert all(item["origin"] == "ai" for item in body["steps"])
     assert all(item["origin"] == "ai" for item in body["evidence"])
     assert body["investigation"]["usage"]["total_tokens"] == 36
+    assert body["investigation"]["usage"]["response_iterations"] == 3
     stored = seeded_client.get("/incidents/INC-019/ai-investigation")
     assert stored.status_code == 200
     assert stored.json()["investigation"]["response_id"] == "resp-final"
@@ -84,6 +85,20 @@ def test_ai_evaluation_workflows_use_real_tools(
     assert response.status_code == 200, response.text
     evidence = next(item for item in response.json()["evidence"] if item["source"] == source)
     assert evidence["payload"][field] == expected
+    assert response.json()["investigation"]["usage"]["response_iterations"] == 2
+
+
+def test_single_turn_final_response_persists_one_iteration(
+    seeded_client: TestClient,
+) -> None:
+    response = run_with_fake(
+        seeded_client,
+        "INC-019",
+        FakeResponsesGateway([final_turn()]),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["investigation"]["usage"]["response_iterations"] == 1
 
 
 def test_tool_failure_is_returned_to_model_and_persisted_as_failed_step(seeded_client: TestClient) -> None:

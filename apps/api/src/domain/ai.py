@@ -15,6 +15,8 @@ class AIInvestigationStatus(StrEnum):
 
 
 class AIInvestigationResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     status: AIInvestigationStatus
     summary: str = Field(min_length=1, max_length=2000)
     diagnosis: str = Field(min_length=1, max_length=4000)
@@ -28,6 +30,7 @@ class ProviderUsage(BaseModel):
     input_tokens: int = 0
     output_tokens: int = 0
     total_tokens: int = 0
+    response_iterations: int = 0
 
 
 class ProviderFunctionCall(BaseModel):

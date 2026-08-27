@@ -28,11 +28,19 @@ class ResponsesGateway:
         api_key: str,
         model: str,
         tools: list[dict[str, Any]],
+        max_retries: int,
+        timeout_seconds: float,
+        max_output_tokens: int,
         client: OpenAI | None = None,
     ) -> None:
         self.model = model
         self._tools = tools
-        self._client = client or OpenAI(api_key=api_key)
+        self._client = client or OpenAI(
+            api_key=api_key,
+            max_retries=max_retries,
+            timeout=timeout_seconds,
+        )
+        self._max_output_tokens = max_output_tokens
         self._instructions = PROMPT_PATH.read_text(encoding="utf-8")
         self._text_format = {
             "format": {
@@ -69,6 +77,7 @@ class ResponsesGateway:
                 instructions=self._instructions,
                 tools=self._tools,
                 text=self._text_format,
+                max_output_tokens=self._max_output_tokens,
                 parallel_tool_calls=True,
                 store=True,
                 **arguments,

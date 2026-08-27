@@ -63,7 +63,12 @@ type AIExecution = {
     model: string;
     response_id: string | null;
     result: AIResult | null;
-    usage: { input_tokens: number; output_tokens: number; total_tokens: number };
+    usage: {
+      input_tokens: number;
+      output_tokens: number;
+      total_tokens: number;
+      response_iterations: number;
+    };
     error: Record<string, unknown> | null;
     created_at: string;
     completed_at: string | null;
