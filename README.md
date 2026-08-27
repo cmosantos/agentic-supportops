@@ -4,9 +4,9 @@ Agentic SupportOps is an IT Support and Operations platform being built incremen
 
 ## Current scope
 
-Missions 01–04 provide the application baseline, a deterministic fictional Contoso environment, plain Python investigation tools, and optional AI-guided investigation through the OpenAI Responses API. The application can seed incidents, execute predefined or model-guided investigations, and persist factual evidence and execution steps.
+The completed missions provide the application baseline, a deterministic fictional Contoso environment, plain Python investigation tools, optional AI-guided investigation through both the OpenAI Responses API and the OpenAI Agents SDK, and a local execution-event timeline. The application can seed incidents, execute predefined or model-guided investigations, and persist factual evidence, tool execution steps, and provider-neutral orchestration events.
 
-AI investigation is disabled unless `OPENAI_API_KEY` is configured. The validated manual Responses API runtime remains the default AI path; a separate single-agent OpenAI Agents SDK runtime is available for controlled comparison. There is no MCP integration, RAG, approval workflow, application OpenTelemetry instrumentation, authentication, background processing, cloud integration, or access to real infrastructure.
+AI investigation is disabled unless `OPENAI_API_KEY` is configured. The validated manual Responses API runtime remains the default AI path; a separate single-agent OpenAI Agents SDK runtime is available for controlled comparison. Agents SDK tracing remains disabled: the local timeline is application-owned and is not exported. There is no MCP integration, RAG, approval workflow, application OpenTelemetry instrumentation, authentication, background processing, cloud integration, or access to real infrastructure.
 
 ## Architecture
 
@@ -125,6 +125,7 @@ No frontend test runner is included because the current UI remains a thin integr
 | `POST` | `/incidents/{incident_id}/investigate-agent-sdk` | Run the comparative single-agent Agents SDK investigation |
 | `GET` | `/incidents/{incident_id}/agent-sdk-investigation` | Read the latest persisted Agents SDK investigation |
 | `GET` | `/incidents/{incident_id}/ai-investigation` | Retrieve the latest persisted AI investigation |
+| `GET` | `/incidents/{incident_id}/investigations/{runtime}/events` | Retrieve the ordered local timeline for `manual_responses` or `agents_sdk` |
 
 Routes accept either the numeric database ID or catalog references such as `INC-002`. Unknown resources and unsupported investigations return structured errors.
 
@@ -134,6 +135,8 @@ The fixture models users, account state, groups, licenses, mailboxes and permiss
 
 Evidence contains observed tool payloads only. Investigation steps record origin, tool, arguments, target, status, result, and timestamps. The tools are read-only and deterministic in both investigation modes. Evidence and steps do not themselves represent a diagnosis.
 
+Investigation events complement those records with the orchestration timeline: run and model-turn boundaries, tool request/execution boundaries, response identifiers, per-turn token usage, and application-measured durations. Events contain compact metadata rather than raw provider payloads, credentials, headers, or duplicated evidence.
+
 ## Roadmap
 
-Mission 04 adds optional OpenAI Responses API tool calling over the existing deterministic capabilities. Future missions may incrementally add MCP exposure, the OpenAI Agents SDK, RAG and knowledge sources, state and memory, human approval, guardrails, tracing, OpenTelemetry, and real infrastructure adapters. Those later layers do not exist yet.
+Future missions may incrementally evaluate external tracing/OpenTelemetry, MCP exposure, RAG and knowledge sources, state and memory, human approval, guardrails, and real infrastructure adapters. Those layers do not exist yet.

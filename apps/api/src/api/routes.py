@@ -6,7 +6,7 @@ from agents import Model
 
 from api.dependencies import get_agents_sdk_model, get_db_session, get_responses_gateway
 from core.config import settings
-from domain.ai import AIInvestigationExecution
+from domain.ai import AIInvestigationExecution, InvestigationEventRead, InvestigationRuntime
 from db.models import IncidentRecord
 from domain.incident import IncidentCreate, IncidentRead
 from domain.investigation import EvidenceRead, InvestigationRead
@@ -180,6 +180,33 @@ def get_incident_agents_sdk_investigation(
             },
         )
     return execution
+
+
+@router.get(
+    "/incidents/{incident_id}/investigations/{runtime}/events",
+    response_model=list[InvestigationEventRead],
+)
+def get_investigation_events(
+    incident_id: str,
+    runtime: InvestigationRuntime,
+    session: DatabaseSession,
+) -> list[InvestigationEventRead]:
+    incident = _incident_or_404(incident_id, session)
+    mode = "ai" if runtime == InvestigationRuntime.MANUAL_RESPONSES else "agents_sdk"
+    repository = InvestigationRepository(session)
+    investigation = repository.get_ai_run(incident.id, mode=mode)
+    if investigation is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "ai_investigation_not_found",
+                "message": "AI investigation not found",
+            },
+        )
+    return [
+        InvestigationEventRead.model_validate(event)
+        for event in repository.list_events(investigation.id)
+    ]
 
 
 def _agents_sdk_service(

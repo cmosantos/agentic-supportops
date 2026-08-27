@@ -14,6 +14,24 @@ class AIInvestigationStatus(StrEnum):
     FAILED = "failed"
 
 
+class InvestigationRuntime(StrEnum):
+    MANUAL_RESPONSES = "manual_responses"
+    AGENTS_SDK = "agents_sdk"
+
+
+class InvestigationEventType(StrEnum):
+    RUN_STARTED = "run_started"
+    MODEL_TURN_STARTED = "model_turn_started"
+    MODEL_TURN_COMPLETED = "model_turn_completed"
+    TOOL_REQUESTED = "tool_requested"
+    TOOL_STARTED = "tool_started"
+    TOOL_COMPLETED = "tool_completed"
+    TOOL_FAILED = "tool_failed"
+    FINAL_OUTPUT = "final_output"
+    RUN_COMPLETED = "run_completed"
+    RUN_FAILED = "run_failed"
+
+
 class AIInvestigationResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -75,3 +93,27 @@ class AIInvestigationExecution(BaseModel):
     investigation: AIInvestigationRead
     evidence: list[EvidenceRead]
     steps: list[InvestigationStepRead]
+
+
+class InvestigationEventRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    investigation_id: int
+    runtime: InvestigationRuntime
+    event_type: InvestigationEventType
+    sequence: int
+    model_turn: int | None
+    tool_name: str | None
+    tool_call_id: str | None
+    arguments: dict[str, Any] | None
+    result_summary: str | None
+    response_id: str | None
+    model: str | None
+    input_tokens: int | None
+    output_tokens: int | None
+    total_tokens: int | None
+    duration_ms: float | None
+    status: str | None
+    timestamp: datetime
+    metadata: dict[str, Any] = Field(validation_alias="event_metadata")

@@ -1,20 +1,23 @@
 import json
+from time import monotonic
 
 import openai
 from agents import Model, RunConfig, Runner
 from agents.exceptions import MaxTurnsExceeded, ModelBehaviorError, ModelTimeoutError
 
 from db.models import IncidentRecord
-from domain.ai import AIInvestigationExecution, AIInvestigationRead, AIInvestigationResult, ProviderUsage
+from domain.ai import AIInvestigationExecution, AIInvestigationRead, AIInvestigationResult, InvestigationEventType, InvestigationRuntime, ProviderUsage
 from domain.investigation import EvidenceRead, InvestigationOrigin, InvestigationStepRead
 from integrations.agents_sdk_runtime import (
     AgentsSDKRunContext,
     AgentsSDKToolLimitError,
+    ObservableAgentsModel,
     build_supportops_agent,
 )
 from repositories.investigation_repository import InvestigationRepository
 from services.ai_investigation_service import AIInvestigationError
 from services.tool_registry import InvestigationToolRegistry
+from services.investigation_event_recorder import InvestigationEventRecorder
 
 
 AGENTS_SDK_MODE = "agents_sdk"
@@ -50,6 +53,15 @@ class AgentsSDKInvestigationService:
         run = self._repository.start_ai_run(
             incident.id, self._model_name, mode=AGENTS_SDK_MODE
         )
+        events = InvestigationEventRecorder(
+            self._repository, run.id, InvestigationRuntime.AGENTS_SDK
+        )
+        run_started = monotonic()
+        events.record(
+            InvestigationEventType.RUN_STARTED,
+            model=self._model_name,
+            status="running",
+        )
         usage = ProviderUsage(runtime=AGENTS_SDK_MODE)
         last_response_id: str | None = None
         context = AgentsSDKRunContext(
@@ -58,9 +70,13 @@ class AgentsSDKInvestigationService:
             incident_id=incident.id,
             max_tool_calls=self._max_tool_calls,
             max_identical_tool_calls=self._max_identical_tool_calls,
+            events=events,
+        )
+        observable_model = ObservableAgentsModel(
+            self._model, self._model_name, events, context
         )
         agent = build_supportops_agent(
-            self._model,
+            observable_model,
             self._tools,
             self._max_output_tokens,
             self._timeout_seconds,
@@ -88,48 +104,77 @@ class AgentsSDKInvestigationService:
                 raise AIInvestigationError(
                     "ai_invalid_result", "Agents SDK returned an invalid investigation result"
                 )
+            model_turn = usage.requests or None
+            events.record(
+                InvestigationEventType.FINAL_OUTPUT,
+                model_turn=model_turn,
+                response_id=last_response_id,
+                status=result.final_output.status.value,
+                metadata={
+                    "confidence": result.final_output.confidence,
+                    "final_agent": result.last_agent.name,
+                },
+            )
             completed = self._repository.complete_ai_run(
                 run, result.final_output, last_response_id, usage
+            )
+            events.record(
+                InvestigationEventType.RUN_COMPLETED,
+                model_turn=model_turn,
+                response_id=last_response_id,
+                model=self._model_name,
+                status=result.final_output.status.value,
+                duration_ms=(monotonic() - run_started) * 1000,
+                metadata={"final_agent": result.last_agent.name},
             )
             return self._execution(incident.id, completed)
         except MaxTurnsExceeded as error:
             usage, last_response_id = self._error_metadata(error, usage, last_response_id)
+            self._record_failure(events, run_started, "ai_loop_limit_reached", last_response_id)
             self._fail(run, "ai_loop_limit_reached", "Maximum Agents SDK turns reached", last_response_id, usage)
             raise AIInvestigationError(
                 "ai_loop_limit_reached", "Maximum Agents SDK turns reached"
             ) from error
         except ModelTimeoutError as error:
             usage, last_response_id = self._error_metadata(error, usage, last_response_id)
+            self._record_failure(events, run_started, "ai_timeout", last_response_id)
             self._fail(run, "ai_timeout", "OpenAI request timed out", last_response_id, usage)
             raise AIInvestigationError("ai_timeout", "OpenAI request timed out") from error
         except ModelBehaviorError as error:
             usage, last_response_id = self._error_metadata(error, usage, last_response_id)
+            self._record_failure(events, run_started, "ai_invalid_result", last_response_id)
             self._fail(run, "ai_invalid_result", "Agents SDK returned invalid model output", last_response_id, usage)
             raise AIInvestigationError(
                 "ai_invalid_result", "Agents SDK returned invalid model output"
             ) from error
         except AgentsSDKToolLimitError as error:
+            self._record_failure(events, run_started, error.code, last_response_id)
             self._fail(run, error.code, str(error), last_response_id, usage)
             raise AIInvestigationError(error.code, str(error)) from error
         except openai.AuthenticationError as error:
+            self._record_failure(events, run_started, "ai_authentication_failed", last_response_id)
             self._fail(run, "ai_authentication_failed", "OpenAI authentication failed", last_response_id, usage)
             raise AIInvestigationError(
                 "ai_authentication_failed", "OpenAI authentication failed"
             ) from error
         except openai.RateLimitError as error:
+            self._record_failure(events, run_started, "ai_rate_limited", last_response_id)
             self._fail(run, "ai_rate_limited", "OpenAI rate limit reached", last_response_id, usage)
             raise AIInvestigationError("ai_rate_limited", "OpenAI rate limit reached") from error
         except (openai.APIConnectionError, openai.APIError) as error:
+            self._record_failure(events, run_started, "ai_provider_unavailable", last_response_id)
             self._fail(run, "ai_provider_unavailable", "OpenAI API is unavailable", last_response_id, usage)
             raise AIInvestigationError(
                 "ai_provider_unavailable", "OpenAI API is unavailable"
             ) from error
         except AIInvestigationError as error:
+            self._record_failure(events, run_started, error.code, last_response_id)
             self._fail(run, error.code, str(error), last_response_id, usage)
             raise
         except Exception as error:
             limit_error = self._find_tool_limit_error(error)
             if limit_error is not None:
+                self._record_failure(events, run_started, limit_error.code, last_response_id)
                 self._fail(
                     run,
                     limit_error.code,
@@ -140,6 +185,7 @@ class AgentsSDKInvestigationService:
                 raise AIInvestigationError(
                     limit_error.code, str(limit_error)
                 ) from error
+            self._record_failure(events, run_started, "agents_sdk_failure", last_response_id)
             self._fail(run, "agents_sdk_failure", "Agents SDK investigation failed", last_response_id, usage)
             raise AIInvestigationError(
                 "agents_sdk_failure", "Agents SDK investigation failed"
@@ -168,6 +214,16 @@ class AgentsSDKInvestigationService:
 
     def _fail(self, run, code: str, message: str, response_id, usage) -> None:
         self._repository.fail_ai_run(run, code, message, response_id, usage)
+
+    @staticmethod
+    def _record_failure(events, run_started, code, response_id) -> None:
+        events.record(
+            InvestigationEventType.RUN_FAILED,
+            response_id=response_id,
+            status="failed",
+            duration_ms=(monotonic() - run_started) * 1000,
+            metadata={"error_code": code},
+        )
 
     @staticmethod
     def _error_metadata(error, fallback_usage, fallback_response_id):

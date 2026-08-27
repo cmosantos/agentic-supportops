@@ -1,12 +1,12 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime, Enum, ForeignKey, JSON, String, Text, UniqueConstraint, func
+from sqlalchemy import DateTime, Enum, Float, ForeignKey, Integer, JSON, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from db.base import Base
 from domain.incident import IncidentPriority, IncidentStatus
 from domain.investigation import InvestigationOrigin, InvestigationStepStatus
-from domain.ai import AIInvestigationStatus
+from domain.ai import AIInvestigationStatus, InvestigationEventType, InvestigationRuntime
 
 
 class IncidentRecord(Base):
@@ -97,3 +97,36 @@ class AIInvestigationRecord(Base):
         DateTime(timezone=True), server_default=func.now()
     )
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class InvestigationEventRecord(Base):
+    __tablename__ = "investigation_events"
+    __table_args__ = (UniqueConstraint("investigation_id", "sequence"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    investigation_id: Mapped[int] = mapped_column(
+        ForeignKey("ai_investigations.id"), index=True
+    )
+    runtime: Mapped[InvestigationRuntime] = mapped_column(
+        Enum(InvestigationRuntime, native_enum=False), index=True
+    )
+    event_type: Mapped[InvestigationEventType] = mapped_column(
+        Enum(InvestigationEventType, native_enum=False), index=True
+    )
+    sequence: Mapped[int] = mapped_column(Integer)
+    model_turn: Mapped[int | None] = mapped_column(Integer)
+    tool_name: Mapped[str | None] = mapped_column(String(100))
+    tool_call_id: Mapped[str | None] = mapped_column(String(200))
+    arguments: Mapped[dict | None] = mapped_column(JSON)
+    result_summary: Mapped[str | None] = mapped_column(Text)
+    response_id: Mapped[str | None] = mapped_column(String(200))
+    model: Mapped[str | None] = mapped_column(String(100))
+    input_tokens: Mapped[int | None] = mapped_column(Integer)
+    output_tokens: Mapped[int | None] = mapped_column(Integer)
+    total_tokens: Mapped[int | None] = mapped_column(Integer)
+    duration_ms: Mapped[float | None] = mapped_column(Float)
+    status: Mapped[str | None] = mapped_column(String(30))
+    timestamp: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    event_metadata: Mapped[dict] = mapped_column("metadata", JSON, default=dict)

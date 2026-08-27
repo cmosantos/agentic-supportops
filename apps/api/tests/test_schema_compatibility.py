@@ -51,6 +51,7 @@ def test_legacy_sqlite_schema_is_upgraded_without_losing_data(tmp_path) -> None:
         "arguments",
     }
     assert "ai_investigations" in inspector.get_table_names()
+    assert "investigation_events" in inspector.get_table_names()
     with engine.connect() as connection:
         evidence = connection.execute(
             text("SELECT id, origin FROM evidence")
@@ -68,6 +69,7 @@ def test_fresh_sqlite_database_remains_supported(tmp_path) -> None:
     ensure_sqlite_schema_compatibility(engine)
     Base.metadata.create_all(engine)
     assert "ai_investigations" in inspect(engine).get_table_names()
+    assert "investigation_events" in inspect(engine).get_table_names()
     engine.dispose()
 
 
