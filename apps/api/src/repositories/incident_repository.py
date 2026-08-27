@@ -25,3 +25,8 @@ class IncidentRepository:
     def get(self, incident_id: int) -> IncidentRecord | None:
         return self._session.get(IncidentRecord, incident_id)
 
+    def get_by_reference(self, reference: str) -> IncidentRecord | None:
+        if reference.isdigit():
+            return self.get(int(reference))
+        statement = select(IncidentRecord).where(IncidentRecord.catalog_id == reference.upper())
+        return self._session.scalar(statement)

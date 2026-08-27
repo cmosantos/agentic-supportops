@@ -25,6 +25,10 @@ class IncidentCreate(BaseModel):
     category: str = Field(min_length=1, max_length=100)
     priority: IncidentPriority = IncidentPriority.MEDIUM
     requester: str = Field(min_length=1, max_length=200)
+    catalog_id: str | None = Field(default=None, max_length=20)
+    affected_resource_type: str | None = Field(default=None, max_length=50)
+    affected_resource_id: str | None = Field(default=None, max_length=100)
+    investigation_context: dict[str, str] = Field(default_factory=dict)
 
 
 class IncidentRead(IncidentCreate):
@@ -34,4 +38,3 @@ class IncidentRead(IncidentCreate):
     status: IncidentStatus
     created_at: datetime
     updated_at: datetime
-

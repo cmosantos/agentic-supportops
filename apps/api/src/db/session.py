@@ -13,4 +13,7 @@ def initialize_database() -> None:
     from db.base import Base
 
     Base.metadata.create_all(bind=engine)
+    from simulation.seed import seed_catalog
 
+    with SessionLocal() as session:
+        seed_catalog(session)

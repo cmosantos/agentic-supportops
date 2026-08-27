@@ -4,33 +4,42 @@ Agentic SupportOps is an IT Support and Operations platform being built incremen
 
 ## Current scope
 
-Mission 01 establishes only the application baseline: an incident API backed by SQLite, a minimal React page, deterministic backend tests, and local developer setup. No AI, agent, MCP, RAG, authentication, background processing, cloud, or observability functionality is included.
+Missions 01–03 provide the application baseline, a deterministic fictional Contoso environment, and plain Python investigation tools. The application can seed incidents, execute predefined investigations, and persist factual evidence and execution steps.
+
+There is no AI, agent, MCP, RAG, authentication, background processing, cloud integration, or access to real infrastructure.
 
 ## Architecture
 
-The browser loads the React/Vite application and calls the FastAPI HTTP API. API routes delegate incident behavior to a small service, which uses a repository to persist SQLAlchemy records in SQLite. Pydantic validates request and response data at the API boundary.
+The React application calls the FastAPI API. Incident routes use application services and SQLAlchemy repositories. Deterministic investigations use declarative playbooks to invoke normal Python tools, which read typed fixture data through the simulation repository. Tool results become persisted evidence and investigation steps.
 
 ```text
-React/Vite -> FastAPI routes -> Incident service -> Repository -> SQLAlchemy -> SQLite
+React/Vite -> FastAPI -> Investigation service -> Investigation tools
+                                   |                    |
+                                   v                    v
+                           Evidence/steps        Contoso fixture
+                                   |
+                                   v
+                           SQLAlchemy/SQLite
 ```
-
-The layers are intentionally small. They separate HTTP, application behavior, and persistence without introducing speculative interfaces or infrastructure.
 
 ## Repository structure
 
 ```text
 apps/
   api/
+    fixtures/         fictional Contoso environment and incident catalog
     src/
-      api/           HTTP routes and dependencies
-      core/          application configuration
-      db/            SQLAlchemy engine, session, and records
-      domain/        incident schemas and enums
-      repositories/  incident persistence operations
-      services/      incident use cases
-    tests/            API tests
-  web/                React, TypeScript, and Vite application
-data/                  local SQLite storage (database files are ignored)
+      api/            HTTP routes and dependencies
+      core/           application configuration
+      db/             SQLAlchemy engine, sessions, and records
+      domain/         typed incident, simulation, and investigation models
+      repositories/   persistence and simulation access
+      services/       incident and investigation orchestration
+      simulation/     deterministic seed/reset
+      tools/          identity, endpoint, network, and monitoring tools
+    tests/             backend tests
+  web/                 React, TypeScript, and Vite application
+data/                  local SQLite storage; database files are ignored
 docs/                  project documentation
 tests/                 reserved for future cross-application tests
 ```
@@ -46,19 +55,35 @@ python -m pip install --upgrade pip
 python -m pip install -e ".\apps\api[dev]"
 ```
 
-This installs the API and its test dependencies into an isolated environment. Start the development API with:
+Start the development API:
 
 ```powershell
 python -m uvicorn main:app --app-dir .\apps\api\src --reload
 ```
 
-The API will be available at `http://localhost:8000`; interactive OpenAPI documentation is at `http://localhost:8000/docs`. The SQLite file is created in `data/agentic_supportops.db` when the application starts.
+The API is available at `http://localhost:8000` and OpenAPI documentation at `http://localhost:8000/docs`. On a new database, the application creates `data/agentic_supportops.db` and seeds the 25 catalog incidents automatically.
 
 Run backend tests:
 
 ```powershell
 python -m pytest .\apps\api\tests
 ```
+
+### Reset the simulation
+
+The reset command drops all local application tables, recreates them, and restores the exact 25-incident baseline. It never contacts a real system.
+
+> Warning: this deletes all incidents, evidence, and investigation steps in the local SQLite database.
+
+```powershell
+$env:PYTHONPATH = ".\apps\api\src"
+python -m simulation.seed --reset
+Remove-Item Env:PYTHONPATH
+```
+
+Expected result: `Simulation reset complete: 25 catalog incidents seeded`.
+
+Because this project has no production data or migrations yet, the Mission 01 SQLite file should be reset once to adopt the expanded schema. Alembic remains unnecessary at this stage.
 
 ## Frontend setup (PowerShell)
 
@@ -70,7 +95,7 @@ npm install
 npm run dev
 ```
 
-The frontend will be available at `http://localhost:5173` and will query the backend health endpoint. To use another API address, copy `.env.example` to `.env` at the repository root and expose `VITE_API_BASE_URL` to the frontend environment, or create `apps/web/.env.local` with that variable.
+The frontend at `http://localhost:5173` shows backend health, lists the seeded catalog, displays incident details, runs supported deterministic playbooks, and renders factual evidence. To change the API address, create `apps/web/.env.local` with `VITE_API_BASE_URL`.
 
 Validate TypeScript and create a production build:
 
@@ -79,7 +104,7 @@ npm run typecheck
 npm run build
 ```
 
-No frontend test runner is included in this baseline because the page has no application behavior beyond a small health request. TypeScript validation and the production build are the current frontend gates.
+No frontend test runner is included because the current UI remains a thin integration surface. TypeScript validation and production build are its gates.
 
 ## API endpoints
 
@@ -88,9 +113,22 @@ No frontend test runner is included in this baseline because the page has no app
 | `GET` | `/health` | Report API availability |
 | `POST` | `/incidents` | Create an incident with initial `open` status |
 | `GET` | `/incidents` | List incidents in creation order |
-| `GET` | `/incidents/{incident_id}` | Retrieve an incident or return a structured 404 |
+| `GET` | `/incidents/{incident_id}` | Retrieve an incident |
+| `POST` | `/incidents/{incident_id}/investigate` | Run its deterministic playbook |
+| `GET` | `/incidents/{incident_id}/evidence` | Retrieve persisted factual evidence |
+| `GET` | `/incidents/{incident_id}/investigation` | Retrieve evidence and execution steps |
+
+Routes accept either the numeric database ID or catalog references such as `INC-002`. Unknown resources and unsupported investigations return structured errors.
+
+## Simulation, tools, and evidence
+
+The fixture models users, account state, groups, licenses, mailboxes and permissions, workstations, network configuration, services, hosts, alerts, metrics, and applications. It intentionally combines healthy resources with known failure states. See [the simulation reference](docs/simulation.md) for the incident and tool catalogs.
+
+Evidence contains observed tool payloads only. Investigation steps record tool, target, status, result, and timestamps. Neither represents a diagnosis.
 
 ## Roadmap
 
-Future missions may incrementally add simulated IT infrastructure, the OpenAI Responses API, tool calling, MCP, the OpenAI Agents SDK, RAG and knowledge sources, state and memory, human approval, guardrails, tracing, OpenTelemetry, and real infrastructure integrations. Each capability will be introduced only when its mission requires it.
+Future missions may incrementally add the OpenAI Responses API, model tool calling over these existing capabilities, MCP exposure, the OpenAI Agents SDK, RAG and knowledge sources, state and memory, human approval, guardrails, tracing, OpenTelemetry, and real infrastructure adapters.
+
+The intended progression is Responses API → tool calling → MCP → Agents SDK. None of those layers exists yet.
 
