@@ -205,10 +205,11 @@ uv run --project .\apps\api --frozen python -m pytest .\apps\api\tests
 uv run --project .\apps\api --frozen python -m pytest .\apps\api\tests\test_mcp_integration.py
 ```
 
-There is no frontend test runner. Its established gates are:
+The focused frontend behavioral suite uses Vitest, React Testing Library, and jsdom. It exercises incident loading and selection, investigation success/failure states, AI/deterministic distinctions, and stale-response protection without a live backend or model call:
 
 ```powershell
 Set-Location .\apps\web
+npm run test:run
 npm run typecheck
 npm run build
 Set-Location ..\..
@@ -219,7 +220,7 @@ Set-Location ..\..
 The committed [GitHub Actions workflow](.github/workflows/ci.yml) targets pull requests and pushes to `master`:
 
 - **Backend:** Python 3.12, uv lock check, frozen dev installation, dependency health, application import, full pytest (`98 passed`), and separately visible real MCP stdio parity (`15 passed`).
-- **Frontend:** Node.js 24, `npm ci`, TypeScript, and Vite production build. There is currently no automated frontend test suite.
+- **Frontend:** Node.js 24, `npm ci`, focused behavioral tests, TypeScript, and Vite production build.
 
 No OpenAI credential, external MCP server, persistent database, or production secret is required. The public repository is published on GitHub, and the workflow and underlying commands have been validated locally and successfully on a GitHub-hosted Ubuntu runner.
 

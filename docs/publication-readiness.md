@@ -18,13 +18,10 @@ This checklist records evidence from local validation and the controlled GitHub 
 - [x] Real MCP stdio parity tests pass locally.
 - [x] Frontend TypeScript validation passes locally.
 - [x] Frontend production build passes locally.
+- [x] Focused frontend behavioral tests pass locally and run as a mandatory CI gate.
 - [x] The public repository was checked for accidental secrets and local/runtime artifacts.
 - [x] GitHub Actions executed successfully on a hosted Ubuntu runner.
 - [x] Hosted backend CI and real MCP stdio parity passed.
 - [x] Hosted frontend TypeScript validation and production build passed.
 - [x] README separates implemented scope from future evolution.
 - [x] Repository status and published history are understood.
-
-## Current limitation
-
-- [ ] Frontend automated tests pass. No frontend test runner exists; TypeScript and build are the established gates.
