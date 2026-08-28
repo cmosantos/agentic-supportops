@@ -7,6 +7,7 @@ This checklist records local evidence collected before controlled GitHub publica
 - [x] No known credentials, private keys, tokens, or secret-bearing URLs are tracked.
 - [x] Local `.env`/`.env.local` files, databases, virtualenvs, caches, build output, `node_modules`, and IDE files are ignored.
 - [x] `.env.example` contains placeholders and safe defaults only.
+- [x] The repository uses the MIT License with explicit public reuse terms.
 - [x] Setup documentation uses the committed uv and npm lockfiles.
 - [x] Architecture and runtime boundaries are documented from source.
 - [x] MCP transport, three-tool allowlist, and security boundary are documented.
@@ -24,7 +25,6 @@ This checklist records local evidence collected before controlled GitHub publica
 ## Intentionally pending
 
 - [ ] GitHub Actions has executed on a hosted runner. This requires Mission 14 publication.
-- [ ] A public license has been selected and added. License choice requires an explicit owner decision.
 - [ ] Frontend automated tests pass. No frontend test runner exists; TypeScript and build are the established gates.
 
 ## Owner decisions before publication

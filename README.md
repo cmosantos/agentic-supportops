@@ -260,3 +260,7 @@ Not yet included:
 - frontend views for complete historical run/event APIs.
 
 See [Publication readiness](docs/publication-readiness.md). Controlled GitHub publication and the first real Actions run are deferred to Mission 14.
+
+## License
+
+Agentic SupportOps is available under the [MIT License](LICENSE).
