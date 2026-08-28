@@ -48,6 +48,7 @@ class EvidenceRead(BaseModel):
 
     id: int
     incident_id: int
+    investigation_id: int | None
     source: str
     resource: str
     origin: InvestigationOrigin
@@ -60,6 +61,7 @@ class InvestigationStepRead(BaseModel):
 
     id: int
     incident_id: int
+    investigation_id: int | None
     tool: str
     target_resource: str
     origin: InvestigationOrigin

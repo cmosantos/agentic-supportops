@@ -20,6 +20,7 @@ type InvestigationOrigin = "deterministic" | "ai";
 type Evidence = {
   id: number;
   incident_id: number;
+  investigation_id: number | null;
   source: string;
   resource: string;
   origin: InvestigationOrigin;
@@ -29,6 +30,7 @@ type Evidence = {
 type InvestigationStep = {
   id: number;
   incident_id: number;
+  investigation_id: number | null;
   tool: string;
   target_resource: string;
   origin: InvestigationOrigin;
@@ -45,8 +47,10 @@ type AIResult = {
   diagnosis: string;
   confidence: number;
   supporting_evidence: string[];
+  evidence_ids: number[];
   recommended_next_steps: string[];
   missing_information: string[];
+  human_action_required: boolean;
 };
 type Investigation = {
   incident_id: number;
@@ -113,6 +117,7 @@ export function App() {
   const [incidents, setIncidents] = useState<Incident[]>([]);
   const [selected, setSelected] = useState<Incident | null>(null);
   const [evidence, setEvidence] = useState<Evidence[]>([]);
+  const [steps, setSteps] = useState<InvestigationStep[]>([]);
   const [investigating, setInvestigating] = useState(false);
   const [investigationError, setInvestigationError] = useState<string | null>(null);
   const [mode, setMode] = useState<InvestigationMode | null>(null);
@@ -173,6 +178,7 @@ export function App() {
     investigationVersion.current += 1;
     setSelected(incident);
     setEvidence([]);
+    setSteps([]);
     setAiResult(null);
     setAiMetadata(null);
     setMode(null);
@@ -189,6 +195,7 @@ export function App() {
     setInvestigating(true);
     setInvestigationError(null);
     setEvidence([]);
+    setSteps([]);
     setAiResult(null);
     setAiMetadata(null);
     setMode(investigationMode);
@@ -207,6 +214,7 @@ export function App() {
         const result: AIExecution = await response.json();
         if (requestVersion !== investigationVersion.current) return;
         setEvidence(result.evidence);
+        setSteps(result.steps);
         setAiResult(result.investigation.result);
         setAiMetadata({
           status: result.investigation.status,
@@ -216,6 +224,7 @@ export function App() {
         const result: Investigation = await response.json();
         if (requestVersion !== investigationVersion.current) return;
         setEvidence(result.evidence);
+        setSteps(result.steps);
       }
     } catch (error: unknown) {
       if (controller.signal.aborted || requestVersion !== investigationVersion.current) return;
@@ -300,7 +309,7 @@ export function App() {
                 {aiResult && (
                   <article className="diagnosis">
                     <div className="diagnosis-heading">
-                      <strong>Validated AI result</strong>
+                      <strong>Investigation assessment</strong>
                       {aiMetadata && (
                         <small>
                           {displayStatus(aiMetadata.status)} · {aiMetadata.model}
@@ -308,13 +317,16 @@ export function App() {
                       )}
                     </div>
                     <p>{aiResult.summary}</p>
-                    <p><b>Diagnosis:</b> {aiResult.diagnosis}</p>
+                    <p><b>Assessment:</b> {aiResult.diagnosis}</p>
                     <p><b>Confidence:</b> {Math.round(aiResult.confidence * 100)}%</p>
                     {aiResult.supporting_evidence.length > 0 && (
                       <section className="result-section">
                         <b>Supporting evidence</b>
                         <ul>{aiResult.supporting_evidence.map((item) => <li key={item}>{item}</li>)}</ul>
                       </section>
+                    )}
+                    {aiResult.evidence_ids.length > 0 && (
+                      <p><b>Evidence references:</b> {aiResult.evidence_ids.map((id) => `#${id}`).join(", ")}</p>
                     )}
                     <section className="result-section">
                       <b>Recommended next steps</b>
@@ -326,15 +338,35 @@ export function App() {
                         <ul>{aiResult.missing_information.map((item) => <li key={item}>{item}</li>)}</ul>
                       </section>
                     )}
+                    {aiResult.human_action_required && (
+                      <p className="human-control">
+                        Human action required — this investigation recommends next steps but does not execute remediation.
+                      </p>
+                    )}
                   </article>
                 )}
-                {evidence.map((item) => (
-                  <article key={item.id}>
-                    <strong>{item.source}</strong>
-                    <small>{item.resource}</small>
-                    <pre>{JSON.stringify(item.payload, null, 2)}</pre>
-                  </article>
-                ))}
+                {steps.length > 0 && (
+                  <section className="result-section" aria-labelledby="investigation-steps">
+                    <h3 id="investigation-steps">Investigation</h3>
+                    <ul>
+                      {steps.map((step) => (
+                        <li key={step.id}>{step.tool} · {step.target_resource} · {displayStatus(step.status)}</li>
+                      ))}
+                    </ul>
+                  </section>
+                )}
+                {evidence.length > 0 && (
+                  <section className="result-section" aria-labelledby="investigation-evidence">
+                    <h3 id="investigation-evidence">Evidence</h3>
+                    {evidence.map((item) => (
+                      <article key={item.id}>
+                        <strong>#{item.id} · {item.source}</strong>
+                        <small>{item.resource}</small>
+                        <pre>{JSON.stringify(item.payload, null, 2)}</pre>
+                      </article>
+                    ))}
+                  </section>
+                )}
               </>
             ) : (
               <p>Select an incident to inspect it.</p>

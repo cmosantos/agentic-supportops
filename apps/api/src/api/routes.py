@@ -9,7 +9,12 @@ from core.config import settings
 from domain.ai import AIInvestigationExecution, AIInvestigationRead, InvestigationEventRead, InvestigationRuntime
 from db.models import IncidentRecord
 from domain.incident import IncidentCreate, IncidentRead
-from domain.investigation import EvidenceRead, InvestigationRead
+from domain.investigation import (
+    EvidenceRead,
+    InvestigationOrigin,
+    InvestigationRead,
+    InvestigationStepRead,
+)
 from repositories.incident_repository import IncidentRepository
 from repositories.investigation_repository import ActiveInvestigationExistsError, InvestigationRepository
 from services.incident_service import IncidentService
@@ -301,6 +306,42 @@ def get_historical_investigation_events(
         InvestigationEventRead.model_validate(event)
         for event in repository.list_events(run.id)
     ]
+
+
+@router.get(
+    "/incidents/{incident_id}/investigation-runs/{investigation_id}/artifacts",
+    response_model=AIInvestigationExecution,
+)
+def get_historical_investigation_artifacts(
+    incident_id: str, investigation_id: int, session: DatabaseSession
+) -> AIInvestigationExecution:
+    incident = _incident_or_404(incident_id, session)
+    repository = InvestigationRepository(session)
+    run = repository.get_ai_run_by_id(incident.id, investigation_id)
+    if run is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "investigation_run_not_found",
+                "message": "Investigation run not found",
+            },
+        )
+    origin = (
+        InvestigationOrigin.AGENTS_SDK
+        if run.mode == "agents_sdk"
+        else InvestigationOrigin.AI
+    )
+    return AIInvestigationExecution(
+        investigation=AIInvestigationRead.model_validate(run),
+        evidence=[
+            EvidenceRead.model_validate(item)
+            for item in repository.list_evidence(incident.id, origin, run.id)
+        ],
+        steps=[
+            InvestigationStepRead.model_validate(item)
+            for item in repository.list_steps(incident.id, origin, run.id)
+        ],
+    )
 
 
 def _mode_for_runtime(runtime: InvestigationRuntime) -> str:

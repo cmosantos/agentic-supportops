@@ -2,7 +2,7 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from domain.investigation import EvidenceRead, InvestigationStepRead
 
@@ -40,8 +40,19 @@ class AIInvestigationResult(BaseModel):
     diagnosis: str = Field(min_length=1, max_length=4000)
     confidence: float = Field(ge=0, le=1)
     supporting_evidence: list[str]
+    evidence_ids: list[int]
     recommended_next_steps: list[str]
     missing_information: list[str]
+    human_action_required: bool
+
+    @model_validator(mode="before")
+    @classmethod
+    def preserve_legacy_results(cls, value):
+        if isinstance(value, dict):
+            value = dict(value)
+            value.setdefault("evidence_ids", [])
+            value.setdefault("human_action_required", True)
+        return value
 
 
 class ProviderUsage(BaseModel):

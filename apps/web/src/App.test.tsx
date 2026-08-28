@@ -40,6 +40,7 @@ const incidents = [
 const deterministicEvidence = {
   id: 10,
   incident_id: 1,
+  investigation_id: null,
   source: "get_disk_usage",
   resource: "app-01",
   origin: "deterministic",
@@ -174,16 +175,30 @@ describe("Agentic SupportOps operator workflow", () => {
               diagnosis: "Logs are consuming the volume.",
               confidence: 0.91,
               supporting_evidence: ["Disk usage is 94%."],
+              evidence_ids: [10],
               recommended_next_steps: ["Review log retention."],
-              missing_information: [],
+              missing_information: ["Log growth rate is not available."],
+              human_action_required: true,
             },
             usage: { input_tokens: 10, output_tokens: 20, total_tokens: 30, response_iterations: 1 },
             error: null,
             created_at: "2026-08-28T12:10:00Z",
             completed_at: "2026-08-28T12:11:00Z",
           },
-          evidence: [],
-          steps: [],
+          evidence: [{ ...deterministicEvidence, investigation_id: 20, origin: "ai" }],
+          steps: [{
+            id: 30,
+            incident_id: 1,
+            investigation_id: 20,
+            tool: "get_disk_usage",
+            target_resource: "app-01",
+            origin: "ai",
+            arguments: { device_id: "app-01" },
+            status: "completed",
+            result: {},
+            created_at: "2026-08-28T12:10:00Z",
+            completed_at: "2026-08-28T12:10:01Z",
+          }],
         }),
     });
     render(<App />);
@@ -193,12 +208,18 @@ describe("Agentic SupportOps operator workflow", () => {
     await userEvent.click(aiButton);
 
     expect(await screen.findByText("Disk pressure confirmed.")).toBeVisible();
-    expect(screen.getByText("Diagnosis:").closest("p")).toHaveTextContent(
-      "Diagnosis: Logs are consuming the volume.",
+    expect(screen.getByText("Assessment:").closest("p")).toHaveTextContent(
+      "Assessment: Logs are consuming the volume.",
     );
     expect(screen.getByText("Confidence:").closest("p")).toHaveTextContent("Confidence: 91%");
     expect(screen.getByText("completed · gpt-test")).toBeVisible();
     expect(screen.getByText("Mode: ai")).toBeVisible();
+    expect(screen.getByText("Evidence references:").closest("p")).toHaveTextContent("#10");
+    expect(screen.getByRole("heading", { name: "Investigation" })).toBeVisible();
+    expect(screen.getByText(/get_disk_usage · app-01 · completed/)).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Evidence" })).toBeVisible();
+    expect(screen.getByText("Log growth rate is not available.")).toBeVisible();
+    expect(screen.getByText(/Human action required/)).toBeVisible();
   });
 
   it("does not let an older investigation response overwrite a newly selected incident", async () => {

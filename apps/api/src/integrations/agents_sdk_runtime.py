@@ -31,6 +31,7 @@ class AgentsSDKRunContext:
     incident_id: int
     max_tool_calls: int
     max_identical_tool_calls: int
+    investigation_id: int | None = None
     tracing: TraceBoundary = field(default_factory=TraceBoundary)
     total_tool_calls: int = 0
     repeated_calls: Counter[str] = field(default_factory=Counter)
@@ -126,11 +127,14 @@ class AgentsSDKRunContext:
             raise
         for key, value in self.tracing.safe_resource_attributes(arguments).items():
             tool_span.set_attribute(key, value)
-        self.repository.record_result(
-            self.incident_id,
-            result,
-            origin=InvestigationOrigin.AGENTS_SDK,
-            arguments=arguments,
+        record_arguments = {
+            "origin": InvestigationOrigin.AGENTS_SDK,
+            "arguments": arguments,
+        }
+        if self.investigation_id is not None:
+            record_arguments["investigation_id"] = self.investigation_id
+        evidence = self.repository.record_result(
+            self.incident_id, result, **record_arguments
         )
         self.selected_tools.append(name)
         tool_span.set_attribute(
@@ -148,7 +152,12 @@ class AgentsSDKRunContext:
                 duration_ms=(monotonic() - started) * 1000,
                 metadata={"transport": self.tools.transport},
             )
-        return result.model_dump_json()
+        return json.dumps(
+            {
+                **result.model_dump(mode="json"),
+                "evidence_id": evidence.id if evidence else None,
+            }
+        )
 
 
 class ObservableAgentsModel(Model):

@@ -203,6 +203,13 @@ def test_fake_runner_executes_real_tools_and_persists_sdk_audit(
     ]
     assert all(step["origin"] == "agents_sdk" for step in body["steps"])
     assert all(item["origin"] == "agents_sdk" for item in body["evidence"])
+    assert body["investigation"]["result"]["evidence_ids"] == [
+        item["id"] for item in body["evidence"]
+    ]
+    assert all(
+        item["investigation_id"] == body["investigation"]["id"]
+        for item in [*body["steps"], *body["evidence"]]
+    )
     assert model.calls[0]["tracing"] is ModelTracing.DISABLED
     assert all(call["settings"].max_tokens == 2000 for call in model.calls)
     assert all(call["settings"].timeout == 60 for call in model.calls)

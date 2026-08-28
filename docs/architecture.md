@@ -82,7 +82,21 @@ stateDiagram-v2
 
 Only `RUNNING` records may transition. A second terminal transition raises `InvalidInvestigationTransitionError`.
 
-Events store run ID, runtime, type, and monotonically increasing sequence. Normal execution appends events; retrieval orders them by sequence. Metadata may include safe transport and trace correlation fields, not provider payloads, credentials, headers, or full evidence.
+Events store `investigation_id`, runtime, type, and monotonically increasing sequence. Normal execution appends events; retrieval orders them by sequence. Metadata may include safe transport and trace correlation fields, not provider payloads, credentials, headers, or full evidence.
+
+## Evidence-driven investigation
+
+```text
+incident -> agent -> tool policy -> approved direct/MCP capability
+         -> persisted evidence -> model correlation -> bounded hypothesis
+         -> operator recommendation
+```
+
+Evidence is a successful, normalized read-only `ToolResult` persisted by the application. Model output is an assessment of that evidence; it is not itself evidence. Each model-guided Evidence and InvestigationStep carries the owning `investigation_id`, and the final result exposes `evidence_ids` that resolve to those committed records. The application replaces any model-supplied identifiers with the IDs actually collected for that investigation. With no successful evidence, it records `insufficient_evidence`, caps confidence, removes unsupported evidence claims, and reports the missing information.
+
+The model can choose only schemas exposed by the application registry. MCP discovery never expands that policy: the MCP transport has its own fixed subset, validates arguments before starting stdio, and normalizes the server response back to `ToolResult` before persistence.
+
+The persisted plan is deliberately lightweight: ordered model/tool events show what category was checked without storing chain-of-thought, scratchpads, prompts, or private deliberation. Recommendations remain human-controlled; no tool can execute the proposed remediation.
 
 ## Persistence and transactions
 
@@ -98,13 +112,13 @@ This permits one manual Responses run and one Agents SDK run for the same incide
 
 Terminal consistency uses one transaction. The recorder adds `run_completed` or `run_failed` with `commit=False`; completion/failure updates the run and commits both. Commit failure rolls both changes back.
 
-Evidence and InvestigationSteps are different: they are latest materialized views by incident and origin, replaced when a new investigation of that origin starts. They are not historical run-keyed records.
+Evidence and InvestigationSteps are different from events but are now append-oriented for model-guided runs. New records carry the current `AIInvestigationRecord.id` as `investigation_id`; historical artifact retrieval filters by that stable relationship. Legacy rows remain readable with a null association, while deterministic evidence retains its existing incident/origin materialized-view behavior.
 
 ## SQLite compatibility
 
 There is no migration framework. Before `Base.metadata.create_all`, `ensure_sqlite_schema_compatibility` performs an idempotent SQLite-only evolution:
 
-- adds legacy Evidence/Step columns and indexes when absent;
+- adds legacy Evidence/Step columns, nullable `investigation_id` associations, and indexes when absent;
 - rebuilds legacy run tables with obsolete uniqueness;
 - preserves run rows during reconstruction;
 - creates the runtime-scoped partial unique index.

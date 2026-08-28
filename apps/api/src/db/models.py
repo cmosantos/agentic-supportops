@@ -40,6 +40,9 @@ class EvidenceRecord(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     incident_id: Mapped[int] = mapped_column(ForeignKey("incidents.id"), index=True)
+    investigation_id: Mapped[int | None] = mapped_column(
+        ForeignKey("ai_investigations.id"), index=True
+    )
     source: Mapped[str] = mapped_column(String(100))
     resource: Mapped[str] = mapped_column(String(100))
     origin: Mapped[InvestigationOrigin] = mapped_column(
@@ -58,6 +61,9 @@ class InvestigationStepRecord(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     incident_id: Mapped[int] = mapped_column(ForeignKey("incidents.id"), index=True)
+    investigation_id: Mapped[int | None] = mapped_column(
+        ForeignKey("ai_investigations.id"), index=True
+    )
     tool: Mapped[str] = mapped_column(String(100))
     target_resource: Mapped[str] = mapped_column(String(100))
     origin: Mapped[InvestigationOrigin] = mapped_column(

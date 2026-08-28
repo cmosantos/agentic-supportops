@@ -15,7 +15,10 @@ from integrations.agents_sdk_runtime import (
     build_supportops_agent,
 )
 from repositories.investigation_repository import InvestigationRepository
-from services.ai_investigation_service import AIInvestigationError
+from services.ai_investigation_service import (
+    AIInvestigationError,
+    ground_investigation_result,
+)
 from services.tool_registry import InvestigationToolRegistry
 from services.investigation_event_recorder import InvestigationEventRecorder
 from observability.tracing import TraceBoundary
@@ -75,7 +78,6 @@ class AgentsSDKInvestigationService:
         run = self._repository.start_ai_run(
             incident.id, self._model_name, mode=AGENTS_SDK_MODE
         )
-        self._repository.replace_start(incident.id, InvestigationOrigin.AGENTS_SDK)
         events = InvestigationEventRecorder(
             self._repository, run.id, InvestigationRuntime.AGENTS_SDK
         )
@@ -91,6 +93,7 @@ class AgentsSDKInvestigationService:
             repository=self._repository,
             tools=self._tools,
             incident_id=incident.id,
+            investigation_id=run.id,
             max_tool_calls=self._max_tool_calls,
             max_identical_tool_calls=self._max_identical_tool_calls,
             events=events,
@@ -128,14 +131,21 @@ class AgentsSDKInvestigationService:
                 raise AIInvestigationError(
                     "ai_invalid_result", "Agents SDK returned an invalid investigation result"
                 )
+            grounded_result = ground_investigation_result(
+                self._repository,
+                incident.id,
+                run.id,
+                InvestigationOrigin.AGENTS_SDK,
+                result.final_output,
+            )
             model_turn = usage.requests or None
             events.record(
                 InvestigationEventType.FINAL_OUTPUT,
                 model_turn=model_turn,
                 response_id=last_response_id,
-                status=result.final_output.status.value,
+                status=grounded_result.status.value,
                 metadata={
-                    "confidence": result.final_output.confidence,
+                    "confidence": grounded_result.confidence,
                     "final_agent": result.last_agent.name,
                 },
             )
@@ -145,12 +155,12 @@ class AgentsSDKInvestigationService:
                 model_turn=model_turn,
                 response_id=last_response_id,
                 model=self._model_name,
-                status=result.final_output.status.value,
+                status=grounded_result.status.value,
                 duration_ms=(monotonic() - run_started) * 1000,
                 metadata={"final_agent": result.last_agent.name},
             )
             completed = self._repository.complete_ai_run(
-                run, result.final_output, last_response_id, usage
+                run, grounded_result, last_response_id, usage
             )
             return self._execution(incident.id, completed)
         except MaxTurnsExceeded as error:
@@ -226,13 +236,13 @@ class AgentsSDKInvestigationService:
             evidence=[
                 EvidenceRead.model_validate(item)
                 for item in self._repository.list_evidence(
-                    incident_id, InvestigationOrigin.AGENTS_SDK
+                    incident_id, InvestigationOrigin.AGENTS_SDK, record.id
                 )
             ],
             steps=[
                 InvestigationStepRead.model_validate(item)
                 for item in self._repository.list_steps(
-                    incident_id, InvestigationOrigin.AGENTS_SDK
+                    incident_id, InvestigationOrigin.AGENTS_SDK, record.id
                 )
             ],
         )

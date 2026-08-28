@@ -63,6 +63,20 @@ def test_multiple_calls_preserve_call_ids_and_persist_ai_origin(seeded_client: T
     assert gateway.continuations[1][0] == "resp-2"
     assert all(item["origin"] == "ai" for item in body["steps"])
     assert all(item["origin"] == "ai" for item in body["evidence"])
+    investigation_id = body["investigation"]["id"]
+    evidence_ids = [item["id"] for item in body["evidence"]]
+    assert len(evidence_ids) == 3
+    assert body["investigation"]["result"]["evidence_ids"] == evidence_ids
+    assert all(
+        item["investigation_id"] == investigation_id
+        for item in [*body["steps"], *body["evidence"]]
+    )
+    assert [
+        json.loads(item.output)["evidence_id"]
+        for continuation in gateway.continuations
+        for item in continuation[1]
+    ] == evidence_ids
+    assert body["investigation"]["result"]["human_action_required"] is True
     assert body["investigation"]["usage"]["total_tokens"] == 36
     assert body["investigation"]["usage"]["response_iterations"] == 3
     stored = seeded_client.get("/incidents/INC-019/ai-investigation")
@@ -102,6 +116,12 @@ def test_single_turn_final_response_persists_one_iteration(
 
     assert response.status_code == 200
     assert response.json()["investigation"]["usage"]["response_iterations"] == 1
+    result = response.json()["investigation"]["result"]
+    assert result["status"] == "insufficient_evidence"
+    assert result["confidence"] <= 0.25
+    assert result["evidence_ids"] == []
+    assert result["supporting_evidence"] == []
+    assert "No successful tool evidence" in result["missing_information"][-1]
 
 
 def test_tool_failure_is_returned_to_model_and_persisted_as_failed_step(seeded_client: TestClient) -> None:
@@ -117,6 +137,67 @@ def test_tool_failure_is_returned_to_model_and_persisted_as_failed_step(seeded_c
     assert output["error"]["code"] == "resource_not_found"
     assert response.json()["steps"][0]["status"] == "failed"
     assert response.json()["evidence"] == []
+
+
+def test_historical_artifacts_remain_isolated_by_investigation(
+    seeded_client: TestClient,
+) -> None:
+    first = run_with_fake(
+        seeded_client,
+        "INC-019",
+        FakeResponsesGateway(
+            [
+                call_turn(
+                    "first-tools",
+                    ("first", "check_external_connectivity", {"device_id": "WS-003"}),
+                ),
+                final_turn("first-final"),
+            ]
+        ),
+    ).json()
+    second = run_with_fake(
+        seeded_client,
+        "INC-019",
+        FakeResponsesGateway(
+            [
+                call_turn(
+                    "second-tools",
+                    (
+                        "second",
+                        "check_dns_resolution",
+                        {
+                            "device_id": "WS-003",
+                            "hostname": "portal.contoso.example",
+                        },
+                    ),
+                ),
+                final_turn("second-final"),
+            ]
+        ),
+    ).json()
+
+    first_id = first["investigation"]["id"]
+    second_id = second["investigation"]["id"]
+    first_history = seeded_client.get(
+        f"/incidents/INC-019/investigation-runs/{first_id}/artifacts"
+    )
+    second_history = seeded_client.get(
+        f"/incidents/INC-019/investigation-runs/{second_id}/artifacts"
+    )
+
+    assert first_history.status_code == second_history.status_code == 200
+    assert [item["source"] for item in first_history.json()["evidence"]] == [
+        "check_external_connectivity"
+    ]
+    assert [item["source"] for item in second_history.json()["evidence"]] == [
+        "check_dns_resolution"
+    ]
+    assert first_history.json()["investigation"]["result"]["evidence_ids"] == [
+        first_history.json()["evidence"][0]["id"]
+    ]
+    assert second_history.json()["investigation"]["result"]["evidence_ids"] == [
+        second_history.json()["evidence"][0]["id"]
+    ]
 
 
 def test_malformed_final_result_is_translated_and_persisted(seeded_client: TestClient) -> None:

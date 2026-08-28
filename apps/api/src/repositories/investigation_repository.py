@@ -42,7 +42,8 @@ class InvestigationRepository:
         result: ToolResult,
         origin: InvestigationOrigin = InvestigationOrigin.DETERMINISTIC,
         arguments: dict | None = None,
-    ) -> None:
+        investigation_id: int | None = None,
+    ) -> EvidenceRecord | None:
         with self._tracing.span(
             "supportops.persistence.write",
             {
@@ -51,7 +52,9 @@ class InvestigationRepository:
                 "supportops.tool.name": result.tool,
             },
         ):
-            self._record_result(incident_id, result, origin, arguments)
+            return self._record_result(
+                incident_id, result, origin, arguments, investigation_id
+            )
 
     def _record_result(
         self,
@@ -59,7 +62,8 @@ class InvestigationRepository:
         result: ToolResult,
         origin: InvestigationOrigin,
         arguments: dict | None,
-    ) -> None:
+        investigation_id: int | None,
+    ) -> EvidenceRecord | None:
         status = (
             InvestigationStepStatus.COMPLETED
             if result.success
@@ -69,6 +73,7 @@ class InvestigationRepository:
         self._session.add(
             InvestigationStepRecord(
                 incident_id=incident_id,
+                investigation_id=investigation_id,
                 tool=result.tool,
                 target_resource=result.resource,
                 origin=origin,
@@ -78,22 +83,27 @@ class InvestigationRepository:
                 completed_at=datetime.now(timezone.utc),
             )
         )
+        evidence = None
         if result.success:
-            self._session.add(
-                EvidenceRecord(
-                    incident_id=incident_id,
-                    source=result.tool,
-                    resource=result.resource,
-                    origin=origin,
-                    payload=result.data or {},
-                )
+            evidence = EvidenceRecord(
+                incident_id=incident_id,
+                investigation_id=investigation_id,
+                source=result.tool,
+                resource=result.resource,
+                origin=origin,
+                payload=result.data or {},
             )
+            self._session.add(evidence)
         self._session.commit()
+        if evidence is not None:
+            self._session.refresh(evidence)
+        return evidence
 
     def list_evidence(
         self,
         incident_id: int,
         origin: InvestigationOrigin = InvestigationOrigin.DETERMINISTIC,
+        investigation_id: int | None = None,
     ) -> list[EvidenceRecord]:
         statement = (
             select(EvidenceRecord)
@@ -103,12 +113,17 @@ class InvestigationRepository:
             )
             .order_by(EvidenceRecord.id)
         )
+        if investigation_id is not None:
+            statement = statement.where(
+                EvidenceRecord.investigation_id == investigation_id
+            )
         return list(self._session.scalars(statement))
 
     def list_steps(
         self,
         incident_id: int,
         origin: InvestigationOrigin = InvestigationOrigin.DETERMINISTIC,
+        investigation_id: int | None = None,
     ) -> list[InvestigationStepRecord]:
         statement = (
             select(InvestigationStepRecord)
@@ -118,6 +133,10 @@ class InvestigationRepository:
             )
             .order_by(InvestigationStepRecord.id)
         )
+        if investigation_id is not None:
+            statement = statement.where(
+                InvestigationStepRecord.investigation_id == investigation_id
+            )
         return list(self._session.scalars(statement))
 
     def start_ai_run(

@@ -10,6 +10,7 @@ from domain.ai import (
     AIInvestigationExecution,
     AIInvestigationRead,
     AIInvestigationResult,
+    AIInvestigationStatus,
     FunctionCallOutput,
     ProviderUsage,
     ResponsesTurn,
@@ -42,6 +43,36 @@ class AIInvestigationError(RuntimeError):
     def __init__(self, code: str, message: str) -> None:
         super().__init__(message)
         self.code = code
+
+
+def ground_investigation_result(
+    repository: InvestigationRepository,
+    incident_id: int,
+    investigation_id: int,
+    origin: InvestigationOrigin,
+    result: AIInvestigationResult,
+) -> AIInvestigationResult:
+    evidence_ids = [
+        item.id
+        for item in repository.list_evidence(
+            incident_id, origin, investigation_id
+        )
+    ]
+    update = {
+        "evidence_ids": evidence_ids,
+        "human_action_required": True,
+    }
+    if not evidence_ids:
+        update.update(
+            status=AIInvestigationStatus.INSUFFICIENT_EVIDENCE,
+            confidence=min(result.confidence, 0.25),
+            supporting_evidence=[],
+            missing_information=[
+                *result.missing_information,
+                "No successful tool evidence was collected for this investigation.",
+            ],
+        )
+    return result.model_copy(update=update)
 
 
 class AIInvestigationService:
@@ -86,7 +117,6 @@ class AIInvestigationService:
         if self._gateway is None:
             raise AIInvestigationError("ai_not_configured", "OpenAI is not configured")
         run = self._repository.start_ai_run(incident.id, self._gateway.model)
-        self._repository.replace_start(incident.id, InvestigationOrigin.AI)
         events = InvestigationEventRecorder(
             self._repository, run.id, InvestigationRuntime.MANUAL_RESPONSES
         )
@@ -163,11 +193,12 @@ class AIInvestigationService:
                             arguments
                         ).items():
                             tool_span.set_attribute(key, value)
-                        self._repository.record_result(
+                        evidence = self._repository.record_result(
                             incident.id,
                             result,
                             origin=InvestigationOrigin.AI,
                             arguments=arguments,
+                            investigation_id=run.id,
                         )
                         tool_status = "completed" if result.success else "failed"
                         tool_span.set_attribute(
@@ -187,7 +218,12 @@ class AIInvestigationService:
                     outputs.append(
                         FunctionCallOutput(
                             call_id=call.call_id,
-                            output=result.model_dump_json(),
+                            output=json.dumps(
+                                {
+                                    **result.model_dump(mode="json"),
+                                    "evidence_id": evidence.id if evidence else None,
+                                }
+                            ),
                         )
                     )
                 turn = self._model_turn(
@@ -205,6 +241,13 @@ class AIInvestigationService:
                 result = AIInvestigationResult.model_validate_json(turn.output_text)
             except ValidationError as error:
                 raise AIInvestigationError("ai_invalid_result", "OpenAI returned an invalid investigation result") from error
+            result = ground_investigation_result(
+                self._repository,
+                incident.id,
+                run.id,
+                InvestigationOrigin.AI,
+                result,
+            )
             events.record(
                 InvestigationEventType.FINAL_OUTPUT,
                 model_turn=iterations,
@@ -276,11 +319,15 @@ class AIInvestigationService:
             investigation=AIInvestigationRead.model_validate(record),
             evidence=[
                 EvidenceRead.model_validate(item)
-                for item in self._repository.list_evidence(incident_id, InvestigationOrigin.AI)
+                for item in self._repository.list_evidence(
+                    incident_id, InvestigationOrigin.AI, record.id
+                )
             ],
             steps=[
                 InvestigationStepRead.model_validate(item)
-                for item in self._repository.list_steps(incident_id, InvestigationOrigin.AI)
+                for item in self._repository.list_steps(
+                    incident_id, InvestigationOrigin.AI, record.id
+                )
             ],
         )
 

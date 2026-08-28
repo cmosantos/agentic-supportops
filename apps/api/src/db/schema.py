@@ -19,10 +19,20 @@ def ensure_sqlite_schema_compatibility(engine: Engine) -> None:
                         "VARCHAR(13) NOT NULL DEFAULT 'DETERMINISTIC'"
                     )
                 )
+            if "investigation_id" not in columns:
+                connection.execute(
+                    text("ALTER TABLE evidence ADD COLUMN investigation_id INTEGER")
+                )
             connection.execute(
                 text(
                     "CREATE INDEX IF NOT EXISTS ix_evidence_origin "
                     "ON evidence (origin)"
+                )
+            )
+            connection.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_evidence_investigation_id "
+                    "ON evidence (investigation_id)"
                 )
             )
 
@@ -45,10 +55,23 @@ def ensure_sqlite_schema_compatibility(engine: Engine) -> None:
                         "JSON NOT NULL DEFAULT '{}'"
                     )
                 )
+            if "investigation_id" not in columns:
+                connection.execute(
+                    text(
+                        "ALTER TABLE investigation_steps "
+                        "ADD COLUMN investigation_id INTEGER"
+                    )
+                )
             connection.execute(
                 text(
                     "CREATE INDEX IF NOT EXISTS ix_investigation_steps_origin "
                     "ON investigation_steps (origin)"
+                )
+            )
+            connection.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_investigation_steps_investigation_id "
+                    "ON investigation_steps (investigation_id)"
                 )
             )
 

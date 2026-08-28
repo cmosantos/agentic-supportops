@@ -63,9 +63,10 @@ The frontend never talks to MCP directly; it calls FastAPI. MCP is an internal a
 2. Deterministic execution resolves a playbook. Model-guided execution creates a persisted run for `manual_responses` or `agents_sdk`.
 3. The runtime appends `run_started`, model-turn, and tool lifecycle events in sequence order.
 4. Tool calls pass through the canonical registry, which validates exact names and string arguments before executing a read-only capability.
-5. Tool observations become evidence and investigation steps. These are the latest materialized view for their incident/runtime, not run-keyed history.
-6. A structured result completes the run, or a controlled failure marks it failed. The terminal event and run transition share one transaction.
-7. Latest endpoints keep compatibility; historical endpoints retrieve prior runs and event timelines explicitly.
+5. Successful tool observations become evidence with a stable ID and the owning `investigation_id`; every tool outcome becomes a similarly scoped investigation step.
+6. The runtime gives persisted evidence IDs back to the model so later turns can correlate multiple observations. The final contract exposes the committed evidence references, hypothesis, confidence, missing information, recommended next steps, and human-control requirement.
+7. A structured result completes the run, or a controlled failure marks it failed. Without useful evidence, the result becomes `insufficient_evidence` rather than presenting unsupported certainty. The terminal event and run transition share one transaction.
+8. Latest endpoints keep compatibility; historical endpoints retrieve prior runs, event timelines, and run-scoped artifacts explicitly.
 
 Models produce diagnoses and recommendations only. The project does not execute remediation or approval-gated write actions.
 
@@ -102,8 +103,8 @@ MCP is not the product API: HTTP endpoints serve the UI and application clients,
 - A partial unique SQLite index permits one `RUNNING` run per `(incident_id, runtime mode)` while retaining historical terminal runs.
 - Database conflicts roll back before a structured HTTP `409` is returned.
 - The terminal event is flushed without committing; the corresponding run transition commits both or rolls both back.
-- Latest APIs retain existing semantics. History APIs list runs newest-first and expose events by stable run ID.
-- Evidence and steps remain latest materialized records. Historical Evidence/Steps keyed by run ID are intentionally not implemented.
+- Latest APIs retain existing semantics. History APIs list runs newest-first and expose events by stable `investigation_id`.
+- Model-guided evidence and steps are linked to their `AIInvestigationRecord`; `/incidents/{incident}/investigation-runs/{investigation_id}/artifacts` resolves the exact evidence behind an older result.
 
 SQLite evolution uses a small idempotent compatibility layer at startup; Alembic is not used. Tests cover fresh databases and legacy unique-constraint/index shapes using temporary storage.
 
