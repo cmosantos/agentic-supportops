@@ -72,10 +72,10 @@ class AgentsSDKInvestigationService:
     def _investigate(self, incident: IncidentRecord) -> AIInvestigationExecution:
         if self._model is None:
             raise AIInvestigationError("ai_not_configured", "OpenAI is not configured")
-        self._repository.replace_start(incident.id, InvestigationOrigin.AGENTS_SDK)
         run = self._repository.start_ai_run(
             incident.id, self._model_name, mode=AGENTS_SDK_MODE
         )
+        self._repository.replace_start(incident.id, InvestigationOrigin.AGENTS_SDK)
         events = InvestigationEventRecorder(
             self._repository, run.id, InvestigationRuntime.AGENTS_SDK
         )
@@ -139,17 +139,18 @@ class AgentsSDKInvestigationService:
                     "final_agent": result.last_agent.name,
                 },
             )
-            completed = self._repository.complete_ai_run(
-                run, result.final_output, last_response_id, usage
-            )
             events.record(
                 InvestigationEventType.RUN_COMPLETED,
+                commit=False,
                 model_turn=model_turn,
                 response_id=last_response_id,
                 model=self._model_name,
                 status=result.final_output.status.value,
                 duration_ms=(monotonic() - run_started) * 1000,
                 metadata={"final_agent": result.last_agent.name},
+            )
+            completed = self._repository.complete_ai_run(
+                run, result.final_output, last_response_id, usage
             )
             return self._execution(incident.id, completed)
         except MaxTurnsExceeded as error:
@@ -243,6 +244,7 @@ class AgentsSDKInvestigationService:
     def _record_failure(events, run_started, code, response_id) -> None:
         events.record(
             InvestigationEventType.RUN_FAILED,
+            commit=False,
             response_id=response_id,
             status="failed",
             duration_ms=(monotonic() - run_started) * 1000,

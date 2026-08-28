@@ -17,7 +17,9 @@ class InvestigationEventRecorder:
         self._runtime = runtime
         self._sequence = repository.next_event_sequence(investigation_id)
 
-    def record(self, event_type: InvestigationEventType, **fields: Any) -> None:
+    def record(
+        self, event_type: InvestigationEventType, *, commit: bool = True, **fields: Any
+    ) -> None:
         if fields.get("duration_ms") is not None:
             fields["duration_ms"] = max(0.0, fields["duration_ms"])
         fields.setdefault("metadata", {})
@@ -30,6 +32,7 @@ class InvestigationEventRecorder:
             self._runtime,
             event_type,
             self._sequence,
+            commit=commit,
             **fields,
         )
         self._sequence += 1

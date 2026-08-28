@@ -55,13 +55,16 @@ def ensure_sqlite_schema_compatibility(engine: Engine) -> None:
         if "ai_investigations" in tables:
             unique_constraints = inspector.get_unique_constraints("ai_investigations")
             unique_indexes = inspector.get_indexes("ai_investigations")
+            legacy_unique_shapes = (["incident_id"], ["incident_id", "mode"])
             has_legacy_incident_constraint = any(
-                constraint.get("column_names") == ["incident_id"]
+                constraint.get("column_names") in legacy_unique_shapes
                 for constraint in unique_constraints
             )
             has_legacy_incident_index = any(
                 bool(index.get("unique"))
-                and index.get("column_names") == ["incident_id"]
+                and index.get("column_names") in legacy_unique_shapes
+                and index.get("name")
+                != "uq_ai_investigations_running_incident_mode"
                 for index in unique_indexes
             )
             has_legacy_incident_unique = (
@@ -79,8 +82,7 @@ def ensure_sqlite_schema_compatibility(engine: Engine) -> None:
                         "response_id VARCHAR(200), result JSON, usage JSON NOT NULL, "
                         "error JSON, created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL, "
                         "completed_at DATETIME, "
-                        "FOREIGN KEY(incident_id) REFERENCES incidents (id), "
-                        "UNIQUE (incident_id, mode))"
+                        "FOREIGN KEY(incident_id) REFERENCES incidents (id))"
                     )
                 )
                 connection.execute(
@@ -108,3 +110,11 @@ def ensure_sqlite_schema_compatibility(engine: Engine) -> None:
                         "ON ai_investigations (status)"
                     )
                 )
+            connection.execute(
+                text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS "
+                    "uq_ai_investigations_running_incident_mode "
+                    "ON ai_investigations (incident_id, mode) "
+                    "WHERE status = 'RUNNING'"
+                )
+            )

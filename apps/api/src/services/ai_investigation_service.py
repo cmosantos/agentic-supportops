@@ -84,8 +84,8 @@ class AIInvestigationService:
     def _investigate(self, incident: IncidentRecord) -> AIInvestigationExecution:
         if self._gateway is None:
             raise AIInvestigationError("ai_not_configured", "OpenAI is not configured")
-        self._repository.replace_start(incident.id, InvestigationOrigin.AI)
         run = self._repository.start_ai_run(incident.id, self._gateway.model)
+        self._repository.replace_start(incident.id, InvestigationOrigin.AI)
         events = InvestigationEventRecorder(
             self._repository, run.id, InvestigationRuntime.MANUAL_RESPONSES
         )
@@ -202,21 +202,23 @@ class AIInvestigationService:
                 status=result.status.value,
                 metadata={"confidence": result.confidence},
             )
-            completed = self._repository.complete_ai_run(
-                run, result, turn.response_id, usage
-            )
             events.record(
                 InvestigationEventType.RUN_COMPLETED,
+                commit=False,
                 model_turn=iterations,
                 response_id=turn.response_id,
                 model=turn.model,
                 status=result.status.value,
                 duration_ms=(monotonic() - run_started) * 1000,
             )
+            completed = self._repository.complete_ai_run(
+                run, result, turn.response_id, usage
+            )
             return self._execution(incident.id, completed)
         except ResponsesProviderError as error:
             events.record(
                 InvestigationEventType.RUN_FAILED,
+                commit=False,
                 response_id=last_response_id,
                 status="failed",
                 duration_ms=(monotonic() - run_started) * 1000,
@@ -227,6 +229,7 @@ class AIInvestigationService:
         except AIInvestigationError as error:
             events.record(
                 InvestigationEventType.RUN_FAILED,
+                commit=False,
                 response_id=last_response_id,
                 status="failed",
                 duration_ms=(monotonic() - run_started) * 1000,
@@ -237,6 +240,7 @@ class AIInvestigationService:
         except Exception as error:
             events.record(
                 InvestigationEventType.RUN_FAILED,
+                commit=False,
                 response_id=last_response_id,
                 status="failed",
                 duration_ms=(monotonic() - run_started) * 1000,

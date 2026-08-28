@@ -4,7 +4,7 @@ Agentic SupportOps is an IT Support and Operations platform being built incremen
 
 ## Current scope
 
-The completed missions provide the application baseline, a deterministic fictional Contoso environment, plain Python investigation tools, optional AI-guided investigation through both the OpenAI Responses API and the OpenAI Agents SDK, and a local execution-event timeline. The application can seed incidents, execute predefined or model-guided investigations, and persist factual evidence, tool execution steps, and provider-neutral orchestration events.
+The completed missions provide the application baseline, a deterministic fictional Contoso environment, plain Python investigation tools, optional AI-guided investigation through both the OpenAI Responses API and the OpenAI Agents SDK, and a local execution-event timeline. The application can seed incidents, execute predefined or model-guided investigations, and persist factual evidence, tool execution steps, immutable historical runs, and provider-neutral orchestration events.
 
 AI investigation is disabled unless `OPENAI_API_KEY` is configured. The validated manual Responses API runtime remains the default AI path; a separate single-agent OpenAI Agents SDK runtime is available for controlled comparison. Agents SDK tracing remains disabled. Application-owned OpenTelemetry tracing is available as an opt-in local diagnostic boundary and exports nothing by default. There is no MCP integration, RAG, approval workflow, external tracing backend, authentication, background processing, cloud integration, or access to real infrastructure.
 
@@ -96,7 +96,7 @@ Remove-Item Env:PYTHONPATH
 
 Expected result: `Simulation reset complete: 25 catalog incidents seeded`.
 
-Because this project has no production data or migrations yet, the Mission 01 SQLite file should be reset once to adopt the expanded schema. Alembic remains unnecessary at this stage.
+The application owns a small idempotent SQLite schema-compatibility layer that upgrades legacy local databases during startup while preserving run history. Alembic is not currently part of this repository.
 
 ## Frontend setup (PowerShell)
 
@@ -136,6 +136,9 @@ No frontend test runner is included because the current UI remains a thin integr
 | `GET` | `/incidents/{incident_id}/agent-sdk-investigation` | Read the latest persisted Agents SDK investigation |
 | `GET` | `/incidents/{incident_id}/ai-investigation` | Retrieve the latest persisted AI investigation |
 | `GET` | `/incidents/{incident_id}/investigations/{runtime}/events` | Retrieve the ordered local timeline for `manual_responses` or `agents_sdk` |
+| `GET` | `/incidents/{incident_id}/investigation-runs` | List all historical AI runs, newest first; optionally filter by `runtime` |
+| `GET` | `/incidents/{incident_id}/investigation-runs/{run_id}` | Retrieve one historical run without changing latest semantics |
+| `GET` | `/incidents/{incident_id}/investigation-runs/{run_id}/events` | Retrieve the append-oriented event timeline for one historical run |
 
 Routes accept either the numeric database ID or catalog references such as `INC-002`. Unknown resources and unsupported investigations return structured errors.
 
@@ -146,6 +149,8 @@ The fixture models users, account state, groups, licenses, mailboxes and permiss
 Evidence contains observed tool payloads only. Investigation steps record origin, tool, arguments, target, status, result, and timestamps. The tools are read-only and deterministic in both investigation modes. Evidence and steps do not themselves represent a diagnosis.
 
 Investigation events complement those records with the orchestration timeline: run and model-turn boundaries, tool request/execution boundaries, response identifiers, per-turn token usage, and application-measured durations. Events contain compact metadata rather than raw provider payloads, credentials, headers, or duplicated evidence.
+
+AI run records are append-only history. Starting a new run never replaces a completed or failed run, and legacy retrieval endpoints continue to resolve the newest run for their runtime. SQLite enforces at most one `RUNNING` run per incident and runtime with a partial unique index, so manual Responses and Agents SDK runs remain independent. The terminal event and terminal run-state transition are committed in the same database transaction. Evidence and investigation steps remain the latest materialized view per incident and runtime; their historical audit is available through each run's event timeline.
 
 These records have deliberately separate roles:
 

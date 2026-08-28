@@ -197,7 +197,7 @@ def test_sdk_failure_and_tool_application_failure_are_observable(
     assert tool_failed["arguments"] == {"device_id": "WS-999"}
 
 
-def test_reexecution_replaces_timeline_and_restarts_sequence(
+def test_reexecution_preserves_history_and_latest_timeline(
     seeded_client: TestClient,
 ) -> None:
     assert run_manual(
@@ -213,12 +213,26 @@ def test_reexecution_replaces_timeline_and_restarts_sequence(
         ),
     ).status_code == 200
     first = events(seeded_client, "manual_responses")
+    first_run_id = first[0]["investigation_id"]
     assert any(item["tool_call_id"] == "first-call" for item in first)
 
     assert run_manual(seeded_client, FakeResponsesGateway([final_turn()])).status_code == 200
     second = events(seeded_client, "manual_responses")
+    second_run_id = second[0]["investigation_id"]
     assert second[0]["sequence"] == 1
+    assert second_run_id != first_run_id
     assert not any(item["tool_call_id"] == "first-call" for item in second)
+    history = seeded_client.get(
+        "/incidents/INC-019/investigation-runs?runtime=manual_responses"
+    ).json()
+    assert [item["id"] for item in history] == [second_run_id, first_run_id]
+    historical_events = seeded_client.get(
+        f"/incidents/INC-019/investigation-runs/{first_run_id}/events"
+    )
+    assert historical_events.status_code == 200
+    assert any(
+        item["tool_call_id"] == "first-call" for item in historical_events.json()
+    )
 
 
 def test_event_schema_is_idempotent_and_sqlite_remains_healthy(tmp_path) -> None:

@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 
 from sqlalchemy import delete, func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from db.models import AIInvestigationRecord, EvidenceRecord, InvestigationEventRecord, InvestigationStepRecord
@@ -137,20 +138,6 @@ class InvestigationRepository:
     def _start_ai_run(
         self, incident_id: int, model: str, mode: str
     ) -> AIInvestigationRecord:
-        existing = self._session.scalar(
-            select(AIInvestigationRecord).where(
-                AIInvestigationRecord.incident_id == incident_id,
-                AIInvestigationRecord.mode == mode,
-            )
-        )
-        if existing is not None:
-            self._session.execute(
-                delete(InvestigationEventRecord).where(
-                    InvestigationEventRecord.investigation_id == existing.id
-                )
-            )
-            self._session.delete(existing)
-            self._session.flush()
         record = AIInvestigationRecord(
             incident_id=incident_id,
             mode=mode,
@@ -161,7 +148,11 @@ class InvestigationRepository:
             ).model_dump(),
         )
         self._session.add(record)
-        self._session.commit()
+        try:
+            self._session.commit()
+        except IntegrityError as error:
+            self._session.rollback()
+            raise ActiveInvestigationExistsError(incident_id, mode) from error
         self._session.refresh(record)
         return record
 
@@ -188,13 +179,14 @@ class InvestigationRepository:
         response_id: str | None,
         usage: ProviderUsage,
     ) -> AIInvestigationRecord:
+        self._require_running(record)
         record.status = result.status
         record.result = result.model_dump(mode="json")
         record.response_id = response_id
         record.usage = usage.model_dump()
         record.error = None
         record.completed_at = datetime.now(timezone.utc)
-        self._session.commit()
+        self._commit()
         self._session.refresh(record)
         return record
 
@@ -223,12 +215,13 @@ class InvestigationRepository:
         response_id: str | None,
         usage: ProviderUsage | None,
     ) -> None:
+        self._require_running(record)
         record.status = AIInvestigationStatus.FAILED
         record.response_id = response_id
         record.usage = (usage or ProviderUsage()).model_dump()
         record.error = {"code": code, "message": message}
         record.completed_at = datetime.now(timezone.utc)
-        self._session.commit()
+        self._commit()
 
     def get_ai_run(
         self, incident_id: int, mode: str = "ai"
@@ -237,8 +230,29 @@ class InvestigationRepository:
             select(AIInvestigationRecord).where(
                 AIInvestigationRecord.incident_id == incident_id,
                 AIInvestigationRecord.mode == mode,
-            )
+            ).order_by(AIInvestigationRecord.id.desc())
         )
+
+    def get_ai_run_by_id(
+        self, incident_id: int, investigation_id: int, mode: str | None = None
+    ) -> AIInvestigationRecord | None:
+        statement = select(AIInvestigationRecord).where(
+            AIInvestigationRecord.id == investigation_id,
+            AIInvestigationRecord.incident_id == incident_id,
+        )
+        if mode is not None:
+            statement = statement.where(AIInvestigationRecord.mode == mode)
+        return self._session.scalar(statement)
+
+    def list_ai_runs(
+        self, incident_id: int, mode: str | None = None
+    ) -> list[AIInvestigationRecord]:
+        statement = select(AIInvestigationRecord).where(
+            AIInvestigationRecord.incident_id == incident_id
+        )
+        if mode is not None:
+            statement = statement.where(AIInvestigationRecord.mode == mode)
+        return list(self._session.scalars(statement.order_by(AIInvestigationRecord.id.desc())))
 
     def record_event(
         self,
@@ -246,6 +260,7 @@ class InvestigationRepository:
         runtime: InvestigationRuntime,
         event_type: InvestigationEventType,
         sequence: int,
+        commit: bool = True,
         **fields,
     ) -> InvestigationEventRecord:
         metadata = fields.pop("metadata", {})
@@ -259,8 +274,11 @@ class InvestigationRepository:
             **fields,
         )
         self._session.add(record)
-        self._session.commit()
-        self._session.refresh(record)
+        if commit:
+            self._commit()
+            self._session.refresh(record)
+        else:
+            self._session.flush()
         return record
 
     def next_event_sequence(self, investigation_id: int) -> int:
@@ -288,3 +306,27 @@ class InvestigationRepository:
                     .order_by(InvestigationEventRecord.sequence)
                 )
             )
+
+    @staticmethod
+    def _require_running(record: AIInvestigationRecord) -> None:
+        if record.status != AIInvestigationStatus.RUNNING:
+            raise InvalidInvestigationTransitionError(record.id, record.status)
+
+    def _commit(self) -> None:
+        try:
+            self._session.commit()
+        except Exception:
+            self._session.rollback()
+            raise
+
+
+class ActiveInvestigationExistsError(RuntimeError):
+    def __init__(self, incident_id: int, mode: str) -> None:
+        super().__init__(f"A running {mode} investigation already exists for incident {incident_id}")
+
+
+class InvalidInvestigationTransitionError(RuntimeError):
+    def __init__(self, investigation_id: int, status: AIInvestigationStatus) -> None:
+        super().__init__(
+            f"Investigation {investigation_id} cannot transition from {status.value}"
+        )

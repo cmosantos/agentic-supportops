@@ -200,10 +200,17 @@ def test_legacy_ai_unique_index_shape_is_migrated_idempotently(tmp_path) -> None
         and item.get("column_names") == ["incident_id"]
         for item in migrated_indexes
     )
-    assert any(
-        item.get("column_names") == ["incident_id", "mode"]
+    assert not any(
+        item.get("column_names") in (["incident_id"], ["incident_id", "mode"])
         for item in migrated_constraints
     )
+    running_index = next(
+        item
+        for item in migrated_indexes
+        if item.get("name") == "uq_ai_investigations_running_incident_mode"
+    )
+    assert bool(running_index["unique"]) is True
+    assert running_index["column_names"] == ["incident_id", "mode"]
 
     with engine.begin() as connection:
         connection.execute(

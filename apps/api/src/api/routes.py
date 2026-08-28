@@ -6,12 +6,12 @@ from agents import Model
 
 from api.dependencies import get_agents_sdk_model, get_db_session, get_responses_gateway, get_trace_boundary
 from core.config import settings
-from domain.ai import AIInvestigationExecution, InvestigationEventRead, InvestigationRuntime
+from domain.ai import AIInvestigationExecution, AIInvestigationRead, InvestigationEventRead, InvestigationRuntime
 from db.models import IncidentRecord
 from domain.incident import IncidentCreate, IncidentRead
 from domain.investigation import EvidenceRead, InvestigationRead
 from repositories.incident_repository import IncidentRepository
-from repositories.investigation_repository import InvestigationRepository
+from repositories.investigation_repository import ActiveInvestigationExistsError, InvestigationRepository
 from services.incident_service import IncidentService
 from integrations.responses_gateway import ResponsesGateway
 from services.ai_investigation_service import AIInvestigationError, AIInvestigationService
@@ -119,6 +119,11 @@ def investigate_incident_with_ai(
     ):
         try:
             return service.investigate(incident)
+        except ActiveInvestigationExistsError as error:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={"code": "investigation_already_running", "message": str(error)},
+            ) from error
         except AIInvestigationError as error:
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
@@ -174,6 +179,11 @@ def investigate_incident_with_agents_sdk(
     ):
         try:
             return service.investigate(incident)
+        except ActiveInvestigationExistsError as error:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={"code": "investigation_already_running", "message": str(error)},
+            ) from error
         except AIInvestigationError as error:
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
@@ -227,6 +237,73 @@ def get_investigation_events(
         InvestigationEventRead.model_validate(event)
         for event in repository.list_events(investigation.id)
     ]
+
+
+@router.get(
+    "/incidents/{incident_id}/investigation-runs",
+    response_model=list[AIInvestigationRead],
+)
+def list_investigation_runs(
+    incident_id: str,
+    session: DatabaseSession,
+    runtime: InvestigationRuntime | None = None,
+) -> list[AIInvestigationRead]:
+    incident = _incident_or_404(incident_id, session)
+    mode = _mode_for_runtime(runtime) if runtime is not None else None
+    return [
+        AIInvestigationRead.model_validate(run)
+        for run in InvestigationRepository(session).list_ai_runs(incident.id, mode)
+    ]
+
+
+@router.get(
+    "/incidents/{incident_id}/investigation-runs/{investigation_id}",
+    response_model=AIInvestigationRead,
+)
+def get_investigation_run(
+    incident_id: str, investigation_id: int, session: DatabaseSession
+) -> AIInvestigationRead:
+    incident = _incident_or_404(incident_id, session)
+    run = InvestigationRepository(session).get_ai_run_by_id(
+        incident.id, investigation_id
+    )
+    if run is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "investigation_run_not_found",
+                "message": "Investigation run not found",
+            },
+        )
+    return AIInvestigationRead.model_validate(run)
+
+
+@router.get(
+    "/incidents/{incident_id}/investigation-runs/{investigation_id}/events",
+    response_model=list[InvestigationEventRead],
+)
+def get_historical_investigation_events(
+    incident_id: str, investigation_id: int, session: DatabaseSession
+) -> list[InvestigationEventRead]:
+    incident = _incident_or_404(incident_id, session)
+    repository = InvestigationRepository(session)
+    run = repository.get_ai_run_by_id(incident.id, investigation_id)
+    if run is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "investigation_run_not_found",
+                "message": "Investigation run not found",
+            },
+        )
+    return [
+        InvestigationEventRead.model_validate(event)
+        for event in repository.list_events(run.id)
+    ]
+
+
+def _mode_for_runtime(runtime: InvestigationRuntime) -> str:
+    return "ai" if runtime == InvestigationRuntime.MANUAL_RESPONSES else "agents_sdk"
 
 
 def _agents_sdk_service(

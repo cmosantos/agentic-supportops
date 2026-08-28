@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime, Enum, Float, ForeignKey, Integer, JSON, String, Text, UniqueConstraint, func
+from sqlalchemy import DateTime, Enum, Float, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint, func, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from db.base import Base
@@ -78,7 +78,15 @@ class InvestigationStepRecord(Base):
 
 class AIInvestigationRecord(Base):
     __tablename__ = "ai_investigations"
-    __table_args__ = (UniqueConstraint("incident_id", "mode"),)
+    __table_args__ = (
+        Index(
+            "uq_ai_investigations_running_incident_mode",
+            "incident_id",
+            "mode",
+            unique=True,
+            sqlite_where=text("status = 'RUNNING'"),
+        ),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     incident_id: Mapped[int] = mapped_column(

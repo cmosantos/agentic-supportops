@@ -11,7 +11,10 @@ from db.models import IncidentRecord
 from domain.ai import AIInvestigationStatus, ProviderUsage, ResponsesTurn
 from integrations.responses_gateway import ResponsesProviderError
 from main import app
-from repositories.investigation_repository import InvestigationRepository
+from repositories.investigation_repository import (
+    ActiveInvestigationExistsError,
+    InvestigationRepository,
+)
 from services.ai_investigation_service import AIInvestigationError, AIInvestigationService
 from services.tool_registry import InvestigationToolRegistry
 from simulation.seed import seed_catalog
@@ -230,3 +233,17 @@ def test_ai_run_starts_running_before_completion(tmp_path) -> None:
         assert run.status == AIInvestigationStatus.RUNNING
         assert run.completed_at is None
     engine.dispose()
+
+
+def test_running_conflict_returns_clean_api_error(
+    seeded_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def conflict(*args, **kwargs):
+        raise ActiveInvestigationExistsError(19, "ai")
+
+    monkeypatch.setattr(InvestigationRepository, "start_ai_run", conflict)
+    response = run_with_fake(
+        seeded_client, "INC-019", FakeResponsesGateway([final_turn()])
+    )
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "investigation_already_running"
