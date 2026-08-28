@@ -6,7 +6,7 @@ Agentic SupportOps is an IT Support and Operations platform being built incremen
 
 The completed missions provide the application baseline, a deterministic fictional Contoso environment, plain Python investigation tools, optional AI-guided investigation through both the OpenAI Responses API and the OpenAI Agents SDK, and a local execution-event timeline. The application can seed incidents, execute predefined or model-guided investigations, and persist factual evidence, tool execution steps, immutable historical runs, and provider-neutral orchestration events.
 
-AI investigation is disabled unless `OPENAI_API_KEY` is configured. The validated manual Responses API runtime remains the default AI path; a separate single-agent OpenAI Agents SDK runtime is available for controlled comparison. Agents SDK tracing remains disabled. Application-owned OpenTelemetry tracing is available as an opt-in local diagnostic boundary and exports nothing by default. There is no MCP integration, RAG, approval workflow, external tracing backend, authentication, background processing, cloud integration, or access to real infrastructure.
+AI investigation is disabled unless `OPENAI_API_KEY` is configured. The validated manual Responses API runtime remains the default AI path; a separate single-agent OpenAI Agents SDK runtime is available for controlled comparison. Agents SDK tracing remains disabled. Application-owned OpenTelemetry tracing is available as an opt-in local diagnostic boundary and exports nothing by default. A local opt-in MCP stdio adapter exposes three existing read-only capabilities for transport comparison. There is no remote MCP integration, RAG, approval workflow, external tracing backend, authentication, background processing, cloud integration, or access to real infrastructure.
 
 ## Architecture
 
@@ -150,6 +150,38 @@ npm run build
 
 No frontend test runner is included because the current UI remains a thin integration surface. TypeScript validation and production build are its gates.
 
+## Continuous integration
+
+GitHub Actions runs the validation workflow on pull requests and pushes to `master`. The independent backend and frontend jobs make failures easy to locate.
+
+The backend job uses Python 3.12 and the committed `uv.lock`, verifies that dependency metadata remains synchronized, installs with `uv sync --frozen`, checks dependency health, imports the FastAPI application, runs the complete pytest suite, and then runs the focused MCP tests as a separately visible gate. Those MCP tests launch the real local stdio subprocess and compare MCP results with direct ToolRegistry execution.
+
+The frontend job uses Node.js 24 and `npm ci` with the committed `package-lock.json`, then runs TypeScript validation and the Vite production build. There is no frontend test step because the project does not define a frontend test script.
+
+The pipeline requires no `OPENAI_API_KEY`, `.env.local`, external MCP server, model request, production secret, or persistent development database. Tests use their existing fakes and isolated temporary SQLite storage.
+
+Reproduce the principal backend gates locally from the repository root:
+
+```powershell
+Set-Location .\apps\api
+uv sync --frozen --extra dev
+uv lock --check
+uv pip check
+uv run --frozen python -m pytest
+uv run --frozen python -m pytest .\tests\test_mcp_integration.py
+Set-Location ..\..
+```
+
+Reproduce the frontend gates:
+
+```powershell
+Set-Location .\apps\web
+npm ci
+npm run typecheck
+npm run build
+Set-Location ..\..
+```
+
 ## API endpoints
 
 | Method | Path | Purpose |
@@ -194,4 +226,4 @@ When tracing is enabled, event metadata may contain the active `trace_id` and `s
 
 ## Roadmap
 
-Future missions may incrementally evaluate a local Collector/export pipeline, MCP exposure, RAG and knowledge sources, state and memory, human approval, guardrails, and real infrastructure adapters. Those layers do not exist yet.
+Future missions may incrementally evaluate a local Collector/export pipeline, remote MCP interoperability, RAG and knowledge sources, state and memory, human approval, guardrails, and real infrastructure adapters. Those layers do not exist yet.
