@@ -1,8 +1,8 @@
 # Publication readiness
 
-This checklist records local evidence collected before controlled GitHub publication. It does not claim publication or a remote GitHub Actions run.
+This checklist records evidence from local validation and the controlled GitHub publication completed on August 28, 2026.
 
-## Verified locally
+## Verified
 
 - [x] No known credentials, private keys, tokens, or secret-bearing URLs are tracked.
 - [x] Local `.env`/`.env.local` files, databases, virtualenvs, caches, build output, `node_modules`, and IDE files are ignored.
@@ -18,15 +18,13 @@ This checklist records local evidence collected before controlled GitHub publica
 - [x] Real MCP stdio parity tests pass locally.
 - [x] Frontend TypeScript validation passes locally.
 - [x] Frontend production build passes locally.
+- [x] The public repository was checked for accidental secrets and local/runtime artifacts.
+- [x] GitHub Actions executed successfully on a hosted Ubuntu runner.
+- [x] Hosted backend CI and real MCP stdio parity passed.
+- [x] Hosted frontend TypeScript validation and production build passed.
 - [x] README separates implemented scope from future evolution.
-- [x] Repository status and intended publication diff are understood.
-- [x] No push, deployment, remote creation, or publication occurred during Mission 13.
+- [x] Repository status and published history are understood.
 
-## Intentionally pending
+## Current limitation
 
-- [ ] GitHub Actions has executed on a hosted runner. This requires Mission 14 publication.
 - [ ] Frontend automated tests pass. No frontend test runner exists; TypeScript and build are the established gates.
-
-## Owner decisions before publication
-
-Choose a license, confirm the GitHub account/organization and visibility, review final commit history, and approve the first push. After publication, inspect the first Actions run before presenting CI as remotely validated.

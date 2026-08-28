@@ -219,7 +219,7 @@ The committed [GitHub Actions workflow](.github/workflows/ci.yml) targets pull r
 - **Backend:** Python 3.12, uv lock check, frozen dev installation, dependency health, application import, full pytest, and separately visible real MCP stdio parity.
 - **Frontend:** Node.js 24, `npm ci`, TypeScript, and Vite production build.
 
-No OpenAI credential, external MCP server, persistent database, or production secret is required. The workflow and underlying commands have been reviewed/validated locally. It has **not yet run on GitHub Actions** because publication is deferred to Mission 14.
+No OpenAI credential, external MCP server, persistent database, or production secret is required. The workflow and underlying commands have been validated locally and on a GitHub-hosted Ubuntu runner.
 
 ## API discoverability
 
@@ -259,7 +259,7 @@ Not yet included:
 - historical Evidence/Steps keyed by run ID;
 - frontend views for complete historical run/event APIs.
 
-See [Publication readiness](docs/publication-readiness.md). Controlled GitHub publication and the first real Actions run are deferred to Mission 14.
+See [Publication readiness](docs/publication-readiness.md) for the verified publication and validation baseline.
 
 ## License
 
