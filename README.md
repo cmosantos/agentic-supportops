@@ -23,6 +23,37 @@ React/Vite -> FastAPI -> Deterministic service -> Investigation tools
                        SQLAlchemy/SQLite
 ```
 
+### Direct and MCP tool transport
+
+`InvestigationToolRegistry` remains the canonical registry and direct execution remains the default. Mission 11 adds an opt-in Model Context Protocol adapter for comparing the existing path with a standards-based local transport:
+
+```text
+                         -> direct -> ToolRegistry -> existing capability
+Agent / application ----|
+                         -> MCP client -> stdio -> MCP server -> ToolRegistry
+                                                                  |
+                                                                  -> same capability
+```
+
+The local MCP server uses the official Python MCP SDK v2 and the `2026-07-28` protocol generation. It exposes only three existing deterministic read-only capabilities: `get_disk_usage`, `check_dns_resolution`, and `get_application_health`. The allowlist is fixed in application code; there is no arbitrary command, module, tool, filesystem, database, credential, or remote-server access. The server writes protocol messages only to stdout; SDK diagnostics use stderr.
+
+Set `TOOL_TRANSPORT=mcp` to let the Responses API and Agents SDK investigation runtimes advertise and dispatch the allowlisted tools through MCP. With the default `TOOL_TRANSPORT=direct`, all existing tools and behavior remain unchanged. `MCP_TIMEOUT_SECONDS` defaults to `10`. Each MCP call launches the local server with the active project Python interpreter, uses stdio without a shell, and closes the client and subprocess after the call.
+
+Run the server directly for a local MCP host:
+
+```powershell
+$env:PYTHONPATH = ".\apps\api\src"
+.\.venv\Scripts\python.exe -m integrations.mcp_server
+```
+
+Run the transport parity and failure tests without an OpenAI request:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest .\apps\api\tests\test_mcp_integration.py
+```
+
+Remote MCP, HTTP/SSE transports, OAuth, MCP Apps, MCP Tasks, destructive capabilities, and third-party MCP servers remain out of scope.
+
 ## Repository structure
 
 ```text

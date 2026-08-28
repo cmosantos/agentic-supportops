@@ -47,6 +47,12 @@ class AgentsSDKRunContext:
                 "supportops.tool.name": name,
                 "supportops.tool.call_id": tool_call_id or "unknown",
                 "supportops.model_turn": model_turn or 0,
+                "supportops.tool.transport": self.tools.transport,
+                **(
+                    {"mcp.transport": "stdio"}
+                    if self.tools.transport == "mcp"
+                    else {}
+                ),
             },
         ) as tool_span:
             return self._execute(
@@ -69,6 +75,7 @@ class AgentsSDKRunContext:
                 tool_name=name,
                 tool_call_id=tool_call_id,
                 status="running",
+                metadata={"transport": self.tools.transport},
             )
         self.total_tool_calls += 1
         if self.total_tool_calls > self.max_tool_calls:
@@ -81,6 +88,7 @@ class AgentsSDKRunContext:
                     status="failed",
                     duration_ms=(monotonic() - started) * 1000,
                     result_summary="Tool was not executed because the total call limit was reached",
+                    metadata={"transport": self.tools.transport},
                 )
             raise AgentsSDKToolLimitError(
                 "ai_tool_limit_reached", "Maximum total tool calls reached"
@@ -97,6 +105,7 @@ class AgentsSDKRunContext:
                     status="failed",
                     duration_ms=(monotonic() - started) * 1000,
                     result_summary="Tool was not executed because the identical call limit was reached",
+                    metadata={"transport": self.tools.transport},
                 )
             raise AgentsSDKToolLimitError(
                 "ai_repeated_call_limit", "Repeated identical tool-call limit reached"
@@ -112,6 +121,7 @@ class AgentsSDKRunContext:
                     tool_call_id=tool_call_id,
                     status="failed",
                     duration_ms=(monotonic() - started) * 1000,
+                    metadata={"transport": self.tools.transport},
                 )
             raise
         for key, value in self.tracing.safe_resource_attributes(arguments).items():
@@ -136,6 +146,7 @@ class AgentsSDKRunContext:
                 result_summary=f"{result.tool} returned {'evidence' if result.success else 'an application error'} for {result.resource}",
                 status="completed" if result.success else "failed",
                 duration_ms=(monotonic() - started) * 1000,
+                metadata={"transport": self.tools.transport},
             )
         return result.model_dump_json()
 

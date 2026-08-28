@@ -47,6 +47,12 @@ class Settings:
     ai_max_output_tokens: int = field(
         default_factory=lambda: int(os.getenv("AI_MAX_OUTPUT_TOKENS", "2000"))
     )
+    tool_transport: str = field(
+        default_factory=lambda: os.getenv("TOOL_TRANSPORT", "direct").lower()
+    )
+    mcp_timeout_seconds: float = field(
+        default_factory=lambda: float(os.getenv("MCP_TIMEOUT_SECONDS", "10"))
+    )
     otel_enabled: bool = field(
         default_factory=lambda: os.getenv("OTEL_ENABLED", "false").lower()
         in {"1", "true", "yes", "on"}
@@ -59,6 +65,12 @@ class Settings:
     otel_exporter: str = field(
         default_factory=lambda: os.getenv("OTEL_EXPORTER", "none").lower()
     )
+
+    def __post_init__(self) -> None:
+        if self.tool_transport not in {"direct", "mcp"}:
+            raise ValueError("TOOL_TRANSPORT must be 'direct' or 'mcp'")
+        if self.mcp_timeout_seconds <= 0:
+            raise ValueError("MCP_TIMEOUT_SECONDS must be greater than zero")
 
 
 settings = Settings()

@@ -14,6 +14,7 @@ from repositories.incident_repository import IncidentRepository
 from repositories.investigation_repository import ActiveInvestigationExistsError, InvestigationRepository
 from services.incident_service import IncidentService
 from integrations.responses_gateway import ResponsesGateway
+from integrations.mcp_client import build_investigation_tools
 from services.ai_investigation_service import AIInvestigationError, AIInvestigationService
 from services.agents_sdk_investigation_service import AgentsSDKInvestigationService
 from services.tool_registry import InvestigationToolRegistry
@@ -103,7 +104,7 @@ def investigate_incident_with_ai(
         )
     service = AIInvestigationService(
         repository=InvestigationRepository(session, tracing),
-        tools=InvestigationToolRegistry(),
+        tools=_investigation_tools(),
         gateway=gateway,
         max_response_iterations=settings.ai_max_response_iterations,
         max_tool_calls=settings.ai_max_tool_calls,
@@ -138,7 +139,7 @@ def get_incident_ai_investigation(
     incident = _incident_or_404(incident_id, session)
     service = AIInvestigationService(
         repository=InvestigationRepository(session),
-        tools=InvestigationToolRegistry(),
+        tools=_investigation_tools(),
         gateway=None,
         max_response_iterations=settings.ai_max_response_iterations,
         max_tool_calls=settings.ai_max_tool_calls,
@@ -312,7 +313,7 @@ def _agents_sdk_service(
     tracing = tracing or TraceBoundary()
     return AgentsSDKInvestigationService(
         repository=InvestigationRepository(session, tracing),
-        tools=InvestigationToolRegistry(),
+        tools=_investigation_tools(),
         model=model,
         model_name=settings.openai_model,
         max_turns=settings.ai_max_response_iterations,
@@ -322,6 +323,10 @@ def _agents_sdk_service(
         timeout_seconds=settings.openai_timeout_seconds,
         tracing=tracing,
     )
+
+
+def _investigation_tools() -> InvestigationToolRegistry:
+    return build_investigation_tools(settings)
 
 
 def _incident_or_404(incident_id: str, session: Session) -> IncidentRecord:

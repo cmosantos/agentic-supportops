@@ -41,6 +41,8 @@ class ToolDefinition:
 
 
 class InvestigationToolRegistry:
+    transport = "direct"
+
     def __init__(self, repository: SimulationRepository | None = None) -> None:
         simulation = repository or SimulationRepository()
         identity = IdentityTools(simulation)
@@ -78,6 +80,14 @@ class InvestigationToolRegistry:
         return self._tools[name].callable(**arguments)
 
     def dispatch(self, name: str, raw_arguments: str) -> tuple[dict[str, Any], ToolResult]:
+        arguments, error = self.validate_arguments(name, raw_arguments)
+        if error is not None:
+            return arguments, error
+        return arguments, self.execute(name, arguments)
+
+    def validate_arguments(
+        self, name: str, raw_arguments: str
+    ) -> tuple[dict[str, Any], ToolResult | None]:
         definition = self._tools.get(name)
         if definition is None:
             return {}, failure(name, "unknown", ToolErrorCode.UNKNOWN_TOOL, f"Unknown tool '{name}'")
@@ -90,7 +100,7 @@ class InvestigationToolRegistry:
         expected = set(inspect.signature(definition.callable).parameters)
         if set(arguments) != expected or not all(isinstance(value, str) for value in arguments.values()):
             return arguments, failure(name, self._resource(arguments), ToolErrorCode.MALFORMED_ARGUMENTS, f"Expected string arguments: {sorted(expected)}")
-        return arguments, definition.callable(**arguments)
+        return arguments, None
 
     @property
     def names(self) -> tuple[str, ...]:
@@ -99,6 +109,12 @@ class InvestigationToolRegistry:
     @property
     def openai_tools(self) -> list[dict[str, Any]]:
         return [definition.openai_schema(name) for name, definition in self._tools.items()]
+
+    def openai_tools_for(self, names: tuple[str, ...]) -> list[dict[str, Any]]:
+        return [self._tools[name].openai_schema(name) for name in names]
+
+    def description(self, name: str) -> str:
+        return self._tools[name].description
 
     @staticmethod
     def _resource(arguments: dict[str, Any]) -> str:

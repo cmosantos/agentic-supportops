@@ -70,6 +70,7 @@ class AIInvestigationService:
         }
         if self._gateway is not None:
             attributes["supportops.model"] = self._gateway.model
+        attributes["supportops.tool.transport"] = self._tools.transport
         with self._tracing.span("supportops.investigation", attributes) as span:
             execution = self._investigate(incident)
             span.set_attribute(
@@ -126,6 +127,12 @@ class AIInvestigationService:
                             "supportops.tool.name": call.name,
                             "supportops.tool.call_id": call.call_id,
                             "supportops.model_turn": iterations,
+                            "supportops.tool.transport": self._tools.transport,
+                            **(
+                                {"mcp.transport": "stdio"}
+                                if self._tools.transport == "mcp"
+                                else {}
+                            ),
                         },
                     ) as tool_span:
                         tool_started = monotonic()
@@ -135,6 +142,7 @@ class AIInvestigationService:
                             tool_name=call.name,
                             tool_call_id=call.call_id,
                             status="running",
+                            metadata={"transport": self._tools.transport},
                         )
                         try:
                             arguments, result = self._tools.dispatch(
@@ -148,6 +156,7 @@ class AIInvestigationService:
                                 tool_call_id=call.call_id,
                                 status="failed",
                                 duration_ms=(monotonic() - tool_started) * 1000,
+                                metadata={"transport": self._tools.transport},
                             )
                             raise
                         for key, value in self._tracing.safe_resource_attributes(
@@ -173,6 +182,7 @@ class AIInvestigationService:
                             result_summary=f"{result.tool} returned {'evidence' if result.success else 'an application error'} for {result.resource}",
                             status=tool_status,
                             duration_ms=(monotonic() - tool_started) * 1000,
+                            metadata={"transport": self._tools.transport},
                         )
                     outputs.append(
                         FunctionCallOutput(
