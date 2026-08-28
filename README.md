@@ -1,10 +1,12 @@
-# Agentic SupportOps
+# 🛠️ Agentic SupportOps
+
+[![CI](https://github.com/cmosantos/agentic-supportops/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/cmosantos/agentic-supportops/actions/workflows/ci.yml)
 
 Agentic SupportOps is a local-first engineering project for controlled IT support investigations. It explores how deterministic workflows and model-guided runtimes can investigate the same incident through governed, read-only capabilities while preserving an auditable execution history.
 
 This is not a general-purpose chatbot. The unit of work is an incident. An investigation gathers factual evidence, and model-guided execution creates a run, records ordered lifecycle/tool events, and finishes with a structured result. Historical runs remain available while existing latest-state APIs stay compatible.
 
-## What is implemented
+## ✅ What is implemented
 
 - React/Vite operator UI for the fictional incident catalog and deterministic or Responses API investigations.
 - FastAPI endpoints for incidents, investigations, evidence, latest state, run/event history, health, and AI configuration.
@@ -18,7 +20,7 @@ This is not a general-purpose chatbot. The unit of work is an incident. An inves
 
 No real infrastructure is queried. The Contoso environment is deterministic fixture data, and every current tool is read-only.
 
-## Engineering goals
+## 🎯 Engineering goals
 
 - **Controlled execution:** the application validates tool names, schemas, call limits, and results.
 - **Shared capability semantics:** all runtimes and transports reuse the same tool implementations.
@@ -29,7 +31,7 @@ No real infrastructure is queried. The Contoso environment is deterministic fixt
 - **Observable execution:** domain events describe business execution; optional spans add technical correlation.
 - **Reproducibility:** committed Python/Node lockfiles and CI use deterministic installation commands.
 
-## Architecture
+## 🏗️ Architecture
 
 ```mermaid
 flowchart TD
@@ -55,7 +57,7 @@ flowchart TD
 
 The frontend never talks to MCP directly; it calls FastAPI. MCP is an internal alternative transport between an agent runtime and selected existing tools. See [Architecture](docs/architecture.md) for responsibilities, lifecycle details, and transaction boundaries.
 
-## Investigation lifecycle
+## 🔄 Investigation lifecycle
 
 1. An operator selects an incident and a supported deterministic or model-guided investigation.
 2. Deterministic execution resolves a playbook. Model-guided execution creates a persisted run for `manual_responses` or `agents_sdk`.
@@ -67,7 +69,7 @@ The frontend never talks to MCP directly; it calls FastAPI. MCP is an internal a
 
 Models produce diagnoses and recommendations only. The project does not execute remediation or approval-gated write actions.
 
-## Direct and MCP execution
+## 🔌 Direct and MCP execution
 
 `TOOL_TRANSPORT=direct` is the default for Responses API and Agents SDK investigations:
 
@@ -92,7 +94,7 @@ The allowlist is fixed in code. The client launches `sys.executable -m integrati
 
 MCP is not the product API: HTTP endpoints serve the UI and application clients, while MCP is an internal comparative tool transport.
 
-## Persistence guarantees
+## 🗄️ Persistence guarantees
 
 - Runs are preserved as history; later runs do not replace earlier completed/failed records.
 - Events are append-oriented and returned by deterministic `sequence` order.
@@ -105,7 +107,7 @@ MCP is not the product API: HTTP endpoints serve the UI and application clients,
 
 SQLite evolution uses a small idempotent compatibility layer at startup; Alembic is not used. Tests cover fresh databases and legacy unique-constraint/index shapes using temporary storage.
 
-## Project structure
+## 🧭 Project structure
 
 ```text
 agentic-supportops/
@@ -130,7 +132,7 @@ agentic-supportops/
 └── docs/                          architecture, simulation, readiness
 ```
 
-## Local development
+## 💻 Local development
 
 ### Prerequisites
 
@@ -192,7 +194,7 @@ uv run --project .\apps\api --frozen python -m simulation.seed --reset
 Remove-Item Env:PYTHONPATH
 ```
 
-## Testing
+## 🧪 Testing
 
 Backend tests cover HTTP contracts, services, tools, fake provider orchestration, lifecycle invariants, SQLite compatibility, tracing, and real MCP stdio parity.
 
@@ -212,16 +214,16 @@ npm run build
 Set-Location ..\..
 ```
 
-## Continuous integration
+## ⚙️ Continuous integration
 
 The committed [GitHub Actions workflow](.github/workflows/ci.yml) targets pull requests and pushes to `master`:
 
-- **Backend:** Python 3.12, uv lock check, frozen dev installation, dependency health, application import, full pytest, and separately visible real MCP stdio parity.
-- **Frontend:** Node.js 24, `npm ci`, TypeScript, and Vite production build.
+- **Backend:** Python 3.12, uv lock check, frozen dev installation, dependency health, application import, full pytest (`98 passed`), and separately visible real MCP stdio parity (`15 passed`).
+- **Frontend:** Node.js 24, `npm ci`, TypeScript, and Vite production build. There is currently no automated frontend test suite.
 
-No OpenAI credential, external MCP server, persistent database, or production secret is required. The workflow and underlying commands have been validated locally and on a GitHub-hosted Ubuntu runner.
+No OpenAI credential, external MCP server, persistent database, or production secret is required. The public repository is published on GitHub, and the workflow and underlying commands have been validated locally and successfully on a GitHub-hosted Ubuntu runner.
 
-## API discoverability
+## 🔎 API discoverability
 
 FastAPI exposes the complete interactive contract at `/docs`.
 
@@ -244,7 +246,7 @@ Invoke-RestMethod http://localhost:8000/incidents
 Invoke-RestMethod http://localhost:8000/incidents/INC-014/investigation-runs
 ```
 
-## Current scope and future evolution
+## 📌 Current scope and future evolution
 
 The project is currently a single-user local application over simulation data. It demonstrates controlled read-only investigation, optional model orchestration, MCP transport comparison, durable run/event history, and local observability. It does not remediate real systems.
 
@@ -261,6 +263,6 @@ Not yet included:
 
 See [Publication readiness](docs/publication-readiness.md) for the verified publication and validation baseline.
 
-## License
+## 📄 License
 
 Agentic SupportOps is available under the [MIT License](LICENSE).
