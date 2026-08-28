@@ -1,229 +1,262 @@
 # Agentic SupportOps
 
-Agentic SupportOps is an IT Support and Operations platform being built incrementally. Its long-term goal is to receive incidents, coordinate investigations, gather evidence, propose diagnoses and recommendations, require human approval for sensitive actions, and expose complete execution history.
+Agentic SupportOps is a local-first engineering project for controlled IT support investigations. It explores how deterministic workflows and model-guided runtimes can investigate the same incident through governed, read-only capabilities while preserving an auditable execution history.
 
-## Current scope
+This is not a general-purpose chatbot. The unit of work is an incident. An investigation gathers factual evidence, and model-guided execution creates a run, records ordered lifecycle/tool events, and finishes with a structured result. Historical runs remain available while existing latest-state APIs stay compatible.
 
-The completed missions provide the application baseline, a deterministic fictional Contoso environment, plain Python investigation tools, optional AI-guided investigation through both the OpenAI Responses API and the OpenAI Agents SDK, and a local execution-event timeline. The application can seed incidents, execute predefined or model-guided investigations, and persist factual evidence, tool execution steps, immutable historical runs, and provider-neutral orchestration events.
+## What is implemented
 
-AI investigation is disabled unless `OPENAI_API_KEY` is configured. The validated manual Responses API runtime remains the default AI path; a separate single-agent OpenAI Agents SDK runtime is available for controlled comparison. Agents SDK tracing remains disabled. Application-owned OpenTelemetry tracing is available as an opt-in local diagnostic boundary and exports nothing by default. A local opt-in MCP stdio adapter exposes three existing read-only capabilities for transport comparison. There is no remote MCP integration, RAG, approval workflow, external tracing backend, authentication, background processing, cloud integration, or access to real infrastructure.
+- React/Vite operator UI for the fictional incident catalog and deterministic or Responses API investigations.
+- FastAPI endpoints for incidents, investigations, evidence, latest state, run/event history, health, and AI configuration.
+- Declarative playbooks backed by 20 provider-independent, read-only SupportOps tools.
+- Optional OpenAI Responses API and comparative OpenAI Agents SDK runtimes.
+- Canonical `InvestigationToolRegistry` for definitions, exact argument validation, execution, and normalized results.
+- Direct execution by default and an opt-in local MCP stdio transport for three allowlisted capabilities.
+- SQLAlchemy/SQLite persistence with append-oriented run/event history, concurrency protection, and atomic terminal persistence.
+- Optional application-owned OpenTelemetry spans; persisted events remain the domain source of truth.
+- Isolated backend tests and CI gates for backend, MCP, TypeScript, and production builds.
+
+No real infrastructure is queried. The Contoso environment is deterministic fixture data, and every current tool is read-only.
+
+## Engineering goals
+
+- **Controlled execution:** the application validates tool names, schemas, call limits, and results.
+- **Shared capability semantics:** all runtimes and transports reuse the same tool implementations.
+- **Historical traceability:** new runs do not overwrite completed or failed run records.
+- **Transactional integrity:** the required terminal event and terminal run state commit together.
+- **Concurrency safety:** SQLite is the final guard against two `RUNNING` executions for the same incident/runtime.
+- **Safe interoperability:** MCP exposes a fixed read-only allowlist, not the entire registry.
+- **Observable execution:** domain events describe business execution; optional spans add technical correlation.
+- **Reproducibility:** committed Python/Node lockfiles and CI use deterministic installation commands.
 
 ## Architecture
 
-The React application calls the FastAPI API. Incident routes use application services and SQLAlchemy repositories. Deterministic investigations use declarative playbooks; optional AI investigations use an isolated Responses API gateway for tool calling. Both paths invoke the same provider-independent Python tools, which read typed fixture data through the simulation repository. Tool results become persisted evidence and investigation steps.
-
-```text
-React/Vite -> FastAPI -> Deterministic service -> Investigation tools
-                    \-> AI service -> Responses gateway -/
-                              |                 |
-                              v                 v
-                       Evidence/steps    OpenAI Responses API
-                              |
-                              v
-                       SQLAlchemy/SQLite
+```mermaid
+flowchart TD
+    Operator[Operator] --> Web[React / Vite UI]
+    Web --> API[FastAPI routes]
+    API --> Services[Application services]
+    Services --> Deterministic[Deterministic playbooks]
+    Services --> Responses[Responses API runtime]
+    Services --> Agents[Agents SDK runtime]
+    Deterministic --> Registry[InvestigationToolRegistry]
+    Responses --> Transport{Tool transport}
+    Agents --> Transport
+    Transport -->|direct - default| Registry
+    Transport -->|MCP opt-in| Client[MCP client]
+    Client -->|stdio| Server[Local MCP server]
+    Server --> Registry
+    Registry --> Capabilities[Read-only SupportOps capabilities]
+    Services --> Repository[SQLAlchemy repositories]
+    Repository --> SQLite[(SQLite)]
+    Repository --> History[Runs and ordered events]
+    Services -. optional .-> OTel[OpenTelemetry boundary]
 ```
 
-### Direct and MCP tool transport
+The frontend never talks to MCP directly; it calls FastAPI. MCP is an internal alternative transport between an agent runtime and selected existing tools. See [Architecture](docs/architecture.md) for responsibilities, lifecycle details, and transaction boundaries.
 
-`InvestigationToolRegistry` remains the canonical registry and direct execution remains the default. Mission 11 adds an opt-in Model Context Protocol adapter for comparing the existing path with a standards-based local transport:
+## Investigation lifecycle
+
+1. An operator selects an incident and a supported deterministic or model-guided investigation.
+2. Deterministic execution resolves a playbook. Model-guided execution creates a persisted run for `manual_responses` or `agents_sdk`.
+3. The runtime appends `run_started`, model-turn, and tool lifecycle events in sequence order.
+4. Tool calls pass through the canonical registry, which validates exact names and string arguments before executing a read-only capability.
+5. Tool observations become evidence and investigation steps. These are the latest materialized view for their incident/runtime, not run-keyed history.
+6. A structured result completes the run, or a controlled failure marks it failed. The terminal event and run transition share one transaction.
+7. Latest endpoints keep compatibility; historical endpoints retrieve prior runs and event timelines explicitly.
+
+Models produce diagnoses and recommendations only. The project does not execute remediation or approval-gated write actions.
+
+## Direct and MCP execution
+
+`TOOL_TRANSPORT=direct` is the default for Responses API and Agents SDK investigations:
 
 ```text
-                         -> direct -> ToolRegistry -> existing capability
-Agent / application ----|
-                         -> MCP client -> stdio -> MCP server -> ToolRegistry
-                                                                  |
-                                                                  -> same capability
+Agent runtime -> InvestigationToolRegistry -> existing capability
 ```
 
-The local MCP server uses the official Python MCP SDK v2 and the `2026-07-28` protocol generation. It exposes only three existing deterministic read-only capabilities: `get_disk_usage`, `check_dns_resolution`, and `get_application_health`. The allowlist is fixed in application code; there is no arbitrary command, module, tool, filesystem, database, credential, or remote-server access. The server writes protocol messages only to stdout; SDK diagnostics use stderr.
+With `TOOL_TRANSPORT=mcp`, the runtime advertises only the MCP allowlist:
 
-Set `TOOL_TRANSPORT=mcp` to let the Responses API and Agents SDK investigation runtimes advertise and dispatch the allowlisted tools through MCP. With the default `TOOL_TRANSPORT=direct`, all existing tools and behavior remain unchanged. `MCP_TIMEOUT_SECONDS` defaults to `10`. Each MCP call launches the local server with the active project Python interpreter, uses stdio without a shell, and closes the client and subprocess after the call.
+```text
+Agent runtime -> MCP client -> stdio -> local MCP server
+              -> InvestigationToolRegistry -> same capability
+```
 
-Run the server directly for a local MCP host:
+The official Python MCP SDK server exposes exactly:
+
+- `get_disk_usage`
+- `check_dns_resolution`
+- `get_application_health`
+
+The allowlist is fixed in code. The client launches `sys.executable -m integrations.mcp_server` without a shell, applies a bounded timeout, validates `ToolResult`, and closes resources after each call. MCP cannot select arbitrary commands/modules or access files, databases, credentials, or other registry tools.
+
+MCP is not the product API: HTTP endpoints serve the UI and application clients, while MCP is an internal comparative tool transport.
+
+## Persistence guarantees
+
+- Runs are preserved as history; later runs do not replace earlier completed/failed records.
+- Events are append-oriented and returned by deterministic `sequence` order.
+- Only `RUNNING` records may transition; repeated terminal transitions are rejected.
+- A partial unique SQLite index permits one `RUNNING` run per `(incident_id, runtime mode)` while retaining historical terminal runs.
+- Database conflicts roll back before a structured HTTP `409` is returned.
+- The terminal event is flushed without committing; the corresponding run transition commits both or rolls both back.
+- Latest APIs retain existing semantics. History APIs list runs newest-first and expose events by stable run ID.
+- Evidence and steps remain latest materialized records. Historical Evidence/Steps keyed by run ID are intentionally not implemented.
+
+SQLite evolution uses a small idempotent compatibility layer at startup; Alembic is not used. Tests cover fresh databases and legacy unique-constraint/index shapes using temporary storage.
+
+## Project structure
+
+```text
+agentic-supportops/
+├── .github/workflows/ci.yml       backend and frontend validation
+├── apps/api/
+│   ├── fixtures/                  fictional Contoso data
+│   ├── prompts/                   model-investigation instructions
+│   ├── src/
+│   │   ├── api/                   FastAPI routes and dependencies
+│   │   ├── db/                    ORM, sessions, schema compatibility
+│   │   ├── domain/                typed execution/API models
+│   │   ├── integrations/          OpenAI, Agents SDK, MCP boundaries
+│   │   ├── observability/         optional OpenTelemetry boundary
+│   │   ├── repositories/          persistence and fixture access
+│   │   ├── services/              orchestration and lifecycle rules
+│   │   └── tools/                 read-only capabilities
+│   ├── tests/                     backend and real MCP stdio tests
+│   ├── pyproject.toml
+│   └── uv.lock
+├── apps/web/                      React, TypeScript, Vite UI
+├── data/                          ignored SQLite data (`.gitkeep` only)
+└── docs/                          architecture, simulation, readiness
+```
+
+## Local development
+
+### Prerequisites
+
+- Python 3.12
+- [uv](https://docs.astral.sh/uv/)
+- Node.js 24 with npm
+
+Commands start from the repository root and are PowerShell-friendly.
+
+### Backend
+
+Install locked runtime and development dependencies:
+
+```powershell
+uv sync --project .\apps\api --frozen --extra dev
+```
+
+No variable is required for deterministic execution, imports, or tests. Defaults and optional settings are in [`.env.example`](.env.example). Create an ignored local override only when needed:
+
+```powershell
+Copy-Item .env.example .env.local
+```
+
+Leave `OPENAI_API_KEY` empty unless intentionally making real model calls. Direct tool transport remains the default.
+
+Start from the repository root so the default relative database path resolves to `data/agentic_supportops.db`:
+
+```powershell
+uv run --project .\apps\api --frozen python -m uvicorn main:app --app-dir .\apps\api\src --reload
+```
+
+The API is at `http://localhost:8000`; OpenAPI is at `http://localhost:8000/docs`. First startup creates the schema, applies compatible legacy upgrades, and seeds 25 incidents. Normal startup preserves existing data.
+
+Run the MCP server independently:
 
 ```powershell
 $env:PYTHONPATH = ".\apps\api\src"
-.\.venv\Scripts\python.exe -m integrations.mcp_server
-```
-
-Run the transport parity and failure tests without an OpenAI request:
-
-```powershell
-.\.venv\Scripts\python.exe -m pytest .\apps\api\tests\test_mcp_integration.py
-```
-
-Remote MCP, HTTP/SSE transports, OAuth, MCP Apps, MCP Tasks, destructive capabilities, and third-party MCP servers remain out of scope.
-
-## Repository structure
-
-```text
-apps/
-  api/
-    fixtures/         fictional Contoso environment and incident catalog
-    src/
-      api/            HTTP routes and dependencies
-      core/           application configuration
-      db/             SQLAlchemy engine, sessions, and records
-      domain/         typed incident, simulation, and investigation models
-      repositories/   persistence and simulation access
-      services/       incident and investigation orchestration
-      simulation/     deterministic seed/reset
-      tools/          identity, endpoint, network, and monitoring tools
-    tests/             backend tests
-  web/                 React, TypeScript, and Vite application
-data/                  local SQLite storage; database files are ignored
-docs/                  project documentation
-tests/                 reserved for future cross-application tests
-```
-
-## Backend setup (PowerShell)
-
-From the repository root, create and activate a Python 3.12+ virtual environment:
-
-```powershell
-py -3.12 -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
-python -m pip install -e ".\apps\api[dev]"
-```
-
-Start the development API:
-
-```powershell
-python -m uvicorn main:app --app-dir .\apps\api\src --reload
-```
-
-The API is available at `http://localhost:8000` and OpenAPI documentation at `http://localhost:8000/docs`. On a new database, the application creates `data/agentic_supportops.db` and seeds the 25 catalog incidents automatically.
-
-AI investigation is optional. Set `OPENAI_API_KEY` in the process environment or repository-root `.env.local` to enable it. Process environment variables take precedence over `.env.local`. The deterministic API remains available without a key.
-
-OpenTelemetry tracing is also optional and independent of AI configuration:
-
-```text
-OTEL_ENABLED=false
-OTEL_SERVICE_NAME=agentic-supportops
-OTEL_EXPORTER=none
-```
-
-Supported exporters are `none` and the local `console` exporter. Tracing is disabled by default, requires no Collector, and never enables the Agents SDK provider tracing.
-
-Run backend tests:
-
-```powershell
-python -m pytest .\apps\api\tests
-```
-
-### Reset the simulation
-
-The reset command drops all local application tables, recreates them, and restores the exact 25-incident baseline. It never contacts a real system.
-
-> Warning: this deletes all incidents, evidence, and investigation steps in the local SQLite database.
-
-```powershell
-$env:PYTHONPATH = ".\apps\api\src"
-python -m simulation.seed --reset
+uv run --project .\apps\api --frozen python -m integrations.mcp_server
 Remove-Item Env:PYTHONPATH
 ```
 
-Expected result: `Simulation reset complete: 25 catalog incidents seeded`.
-
-The application owns a small idempotent SQLite schema-compatibility layer that upgrades legacy local databases during startup while preserving run history. Alembic is not currently part of this repository.
-
-## Frontend setup (PowerShell)
-
-In a second PowerShell terminal:
-
-```powershell
-Set-Location .\apps\web
-npm install
-npm run dev
-```
-
-The frontend at `http://localhost:5173` shows backend health, lists the seeded catalog, displays incident details, runs supported deterministic playbooks, and renders factual evidence. To change the API address, create `apps/web/.env.local` with `VITE_API_BASE_URL`.
-
-Validate TypeScript and create a production build:
-
-```powershell
-npm run typecheck
-npm run build
-```
-
-No frontend test runner is included because the current UI remains a thin integration surface. TypeScript validation and production build are its gates.
-
-## Continuous integration
-
-GitHub Actions runs the validation workflow on pull requests and pushes to `master`. The independent backend and frontend jobs make failures easy to locate.
-
-The backend job uses Python 3.12 and the committed `uv.lock`, verifies that dependency metadata remains synchronized, installs with `uv sync --frozen`, checks dependency health, imports the FastAPI application, runs the complete pytest suite, and then runs the focused MCP tests as a separately visible gate. Those MCP tests launch the real local stdio subprocess and compare MCP results with direct ToolRegistry execution.
-
-The frontend job uses Node.js 24 and `npm ci` with the committed `package-lock.json`, then runs TypeScript validation and the Vite production build. There is no frontend test step because the project does not define a frontend test script.
-
-The pipeline requires no `OPENAI_API_KEY`, `.env.local`, external MCP server, model request, production secret, or persistent development database. Tests use their existing fakes and isolated temporary SQLite storage.
-
-Reproduce the principal backend gates locally from the repository root:
-
-```powershell
-Set-Location .\apps\api
-uv sync --frozen --extra dev
-uv lock --check
-uv pip check
-uv run --frozen python -m pytest
-uv run --frozen python -m pytest .\tests\test_mcp_integration.py
-Set-Location ..\..
-```
-
-Reproduce the frontend gates:
+### Frontend
 
 ```powershell
 Set-Location .\apps\web
 npm ci
+npm run dev
+```
+
+The UI is at `http://localhost:5173`. Use `apps/web/.env.local` with `VITE_API_BASE_URL` only when the API is elsewhere.
+
+### Resetting local data
+
+This command drops application tables and restores the fixture baseline. Back up needed local history first.
+
+```powershell
+$env:PYTHONPATH = ".\apps\api\src"
+uv run --project .\apps\api --frozen python -m simulation.seed --reset
+Remove-Item Env:PYTHONPATH
+```
+
+## Testing
+
+Backend tests cover HTTP contracts, services, tools, fake provider orchestration, lifecycle invariants, SQLite compatibility, tracing, and real MCP stdio parity.
+
+```powershell
+uv lock --project .\apps\api --check
+uv pip check --python .\apps\api\.venv\Scripts\python.exe
+uv run --project .\apps\api --frozen python -m pytest .\apps\api\tests
+uv run --project .\apps\api --frozen python -m pytest .\apps\api\tests\test_mcp_integration.py
+```
+
+There is no frontend test runner. Its established gates are:
+
+```powershell
+Set-Location .\apps\web
 npm run typecheck
 npm run build
 Set-Location ..\..
 ```
 
-## API endpoints
+## Continuous integration
 
-| Method | Path | Purpose |
-| --- | --- | --- |
-| `GET` | `/health` | Report API availability |
-| `POST` | `/incidents` | Create an incident with initial `open` status |
-| `GET` | `/incidents` | List incidents in creation order |
-| `GET` | `/incidents/{incident_id}` | Retrieve an incident |
-| `POST` | `/incidents/{incident_id}/investigate` | Run its deterministic playbook |
-| `GET` | `/incidents/{incident_id}/evidence` | Retrieve persisted factual evidence |
-| `GET` | `/incidents/{incident_id}/investigation` | Retrieve evidence and execution steps |
-| `GET` | `/ai/config` | Report whether optional AI investigation is configured |
-| `POST` | `/incidents/{incident_id}/investigate-ai` | Run an AI-guided investigation through read-only tools |
-| `POST` | `/incidents/{incident_id}/investigate-agent-sdk` | Run the comparative single-agent Agents SDK investigation |
-| `GET` | `/incidents/{incident_id}/agent-sdk-investigation` | Read the latest persisted Agents SDK investigation |
-| `GET` | `/incidents/{incident_id}/ai-investigation` | Retrieve the latest persisted AI investigation |
-| `GET` | `/incidents/{incident_id}/investigations/{runtime}/events` | Retrieve the ordered local timeline for `manual_responses` or `agents_sdk` |
-| `GET` | `/incidents/{incident_id}/investigation-runs` | List all historical AI runs, newest first; optionally filter by `runtime` |
-| `GET` | `/incidents/{incident_id}/investigation-runs/{run_id}` | Retrieve one historical run without changing latest semantics |
-| `GET` | `/incidents/{incident_id}/investigation-runs/{run_id}/events` | Retrieve the append-oriented event timeline for one historical run |
+The committed [GitHub Actions workflow](.github/workflows/ci.yml) targets pull requests and pushes to `master`:
 
-Routes accept either the numeric database ID or catalog references such as `INC-002`. Unknown resources and unsupported investigations return structured errors.
+- **Backend:** Python 3.12, uv lock check, frozen dev installation, dependency health, application import, full pytest, and separately visible real MCP stdio parity.
+- **Frontend:** Node.js 24, `npm ci`, TypeScript, and Vite production build.
 
-## Simulation, tools, and evidence
+No OpenAI credential, external MCP server, persistent database, or production secret is required. The workflow and underlying commands have been reviewed/validated locally. It has **not yet run on GitHub Actions** because publication is deferred to Mission 14.
 
-The fixture models users, account state, groups, licenses, mailboxes and permissions, workstations, network configuration, services, hosts, alerts, metrics, and applications. It intentionally combines healthy resources with known failure states. See [the simulation reference](docs/simulation.md) for the incident and tool catalogs.
+## API discoverability
 
-Evidence contains observed tool payloads only. Investigation steps record origin, tool, arguments, target, status, result, and timestamps. The tools are read-only and deterministic in both investigation modes. Evidence and steps do not themselves represent a diagnosis.
+FastAPI exposes the complete interactive contract at `/docs`.
 
-Investigation events complement those records with the orchestration timeline: run and model-turn boundaries, tool request/execution boundaries, response identifiers, per-turn token usage, and application-measured durations. Events contain compact metadata rather than raw provider payloads, credentials, headers, or duplicated evidence.
+| Group | Representative endpoints |
+| --- | --- |
+| Health/config | `GET /health`, `GET /ai/config` |
+| Incidents | `POST /incidents`, `GET /incidents`, `GET /incidents/{incident_id}` |
+| Deterministic | `POST /incidents/{incident_id}/investigate`, `GET /incidents/{incident_id}/investigation` |
+| Model-guided | `POST /incidents/{incident_id}/investigate-ai`, `POST /incidents/{incident_id}/investigate-agent-sdk` |
+| Latest state | `GET /incidents/{incident_id}/ai-investigation`, `GET /incidents/{incident_id}/agent-sdk-investigation` |
+| Latest event timeline | `GET /incidents/{incident_id}/investigations/{runtime}/events` |
+| Run history | `GET /incidents/{incident_id}/investigation-runs?runtime=manual_responses` |
+| Event history | `GET /incidents/{incident_id}/investigation-runs/{run_id}/events` |
 
-AI run records are append-only history. Starting a new run never replaces a completed or failed run, and legacy retrieval endpoints continue to resolve the newest run for their runtime. SQLite enforces at most one `RUNNING` run per incident and runtime with a partial unique index, so manual Responses and Agents SDK runs remain independent. The terminal event and terminal run-state transition are committed in the same database transaction. Evidence and investigation steps remain the latest materialized view per incident and runtime; their historical audit is available through each run's event timeline.
+References such as `INC-014` and numeric IDs are accepted where `{incident_id}` appears.
 
-These records have deliberately separate roles:
+```powershell
+Invoke-RestMethod http://localhost:8000/health
+Invoke-RestMethod http://localhost:8000/incidents
+Invoke-RestMethod http://localhost:8000/incidents/INC-014/investigation-runs
+```
 
-- `Evidence` stores observed facts.
-- `InvestigationStep` is the application audit of tool execution.
-- `InvestigationEvent` is the persisted SupportOps runtime timeline and remains the domain source of truth.
-- OpenTelemetry spans describe the technical parent/child execution path and latency. They are diagnostic data, not application state.
+## Current scope and future evolution
 
-When tracing is enabled, event metadata may contain the active `trace_id` and `span_id` for correlation. Prompts, evidence payloads, response bodies, credentials, and HTTP headers are not span attributes.
+The project is currently a single-user local application over simulation data. It demonstrates controlled read-only investigation, optional model orchestration, MCP transport comparison, durable run/event history, and local observability. It does not remediate real systems.
 
-## Roadmap
+Not yet included:
 
-Future missions may incrementally evaluate a local Collector/export pipeline, remote MCP interoperability, RAG and knowledge sources, state and memory, human approval, guardrails, and real infrastructure adapters. Those layers do not exist yet.
+- authentication, authorization, or multi-user tenancy;
+- approval workflows and write/remediation tools;
+- remote MCP, Streamable HTTP, OAuth, or persistent MCP pooling;
+- PostgreSQL or production database operations;
+- external ticketing/infrastructure integrations;
+- hosted telemetry, deployment, or cloud infrastructure;
+- historical Evidence/Steps keyed by run ID;
+- frontend views for complete historical run/event APIs.
+
+See [Publication readiness](docs/publication-readiness.md). Controlled GitHub publication and the first real Actions run are deferred to Mission 14.

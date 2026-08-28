@@ -8,6 +8,7 @@ __pycache__/
 .pytest_tmp/
 .coverage
 htmlcov/
+*.log
 *.db
 *.sqlite
 *.sqlite3
