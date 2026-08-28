@@ -98,6 +98,18 @@ The model can choose only schemas exposed by the application registry. MCP disco
 
 The persisted plan is deliberately lightweight: ordered model/tool events show what category was checked without storing chain-of-thought, scratchpads, prompts, or private deliberation. Recommendations remain human-controlled; no tool can execute the proposed remediation.
 
+## Human approval boundary
+
+```text
+investigation -> recommendation -> structured action proposal
+              -> application policy validation -> PENDING
+              -> human APPROVED or REJECTED
+```
+
+An action proposal is durable application data linked to the originating `AIInvestigationRecord` and its evidence IDs. The model may suggest only bounded data; the application registry authoritatively accepts `restart_simulated_service`, `unlock_simulated_user`, or `reset_simulated_application_state` with exact parameter shapes. Unknown actions, mismatched evidence, and ineligible investigations fail closed.
+
+Proposal creation and decisions append `action_proposal_created`, `action_proposal_approved`, or `action_proposal_rejected` to the existing investigation event timeline. A decision state and its event share one database transaction. Approval records human intent only: there is no executor, execute endpoint, remediation tool, shell command, operating-system write, arbitrary HTTP request, or write-capable MCP capability.
+
 ## Persistence and transactions
 
 Run records are append-oriented history. Latest lookups order by descending run ID; history lists all runs newest-first. Historical events are explicitly run-scoped.
@@ -135,4 +147,4 @@ Tracing is off by default. Supported local exporters are `none` and `console`; n
 
 The operator chooses the incident and investigation mode. AI is unavailable in the UI without an OpenAI key. Selecting another incident aborts the browser request/view; it is not a server-side cancellation protocol.
 
-There is currently no authentication, approval workflow, remediation tool, remote MCP deployment, background queue, or multi-user control plane. Recommendations are operator-facing output, not automatically authorized actions.
+There is currently no authentication, remediation executor, remote MCP deployment, background queue, or multi-user control plane. Recommendations may become allowlisted action proposals, but approval is only a persisted human decision and does not execute an action.

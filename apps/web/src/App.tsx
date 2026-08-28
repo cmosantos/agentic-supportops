@@ -51,6 +51,24 @@ type AIResult = {
   recommended_next_steps: string[];
   missing_information: string[];
   human_action_required: boolean;
+  proposed_action: ActionProposalInput | null;
+};
+type ActionProposalInput = {
+  action_type: string;
+  target: string;
+  parameters: Record<string, unknown>;
+  rationale: string;
+  supporting_evidence_ids: number[];
+  risk_level: "low" | "medium" | "high";
+};
+type ActionProposal = ActionProposalInput & {
+  id: number;
+  investigation_id: number;
+  incident_id: number;
+  approval_status: "pending" | "approved" | "rejected";
+  created_at: string;
+  decision_at: string | null;
+  rejection_reason: string | null;
 };
 type Investigation = {
   incident_id: number;
@@ -124,6 +142,9 @@ export function App() {
   const [aiConfigured, setAiConfigured] = useState(false);
   const [aiResult, setAiResult] = useState<AIResult | null>(null);
   const [aiMetadata, setAiMetadata] = useState<AIMetadata | null>(null);
+  const [actionProposal, setActionProposal] = useState<ActionProposal | null>(null);
+  const [proposalError, setProposalError] = useState<string | null>(null);
+  const [decidingProposal, setDecidingProposal] = useState(false);
   const investigationRequest = useRef<AbortController | null>(null);
   const investigationVersion = useRef(0);
 
@@ -181,6 +202,8 @@ export function App() {
     setSteps([]);
     setAiResult(null);
     setAiMetadata(null);
+    setActionProposal(null);
+    setProposalError(null);
     setMode(null);
     setInvestigationError(null);
     setInvestigating(false);
@@ -198,6 +221,8 @@ export function App() {
     setSteps([]);
     setAiResult(null);
     setAiMetadata(null);
+    setActionProposal(null);
+    setProposalError(null);
     setMode(investigationMode);
 
     try {
@@ -220,6 +245,22 @@ export function App() {
           status: result.investigation.status,
           model: result.investigation.model,
         });
+        if (result.investigation.result?.proposed_action) {
+          const proposalResponse = await fetch(
+            `${apiBaseUrl}/incidents/${reference}/investigation-runs/${result.investigation.id}/action-proposals`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(result.investigation.result.proposed_action),
+              signal: controller.signal,
+            },
+          );
+          if (!proposalResponse.ok) {
+            setProposalError(await investigationErrorMessage(proposalResponse));
+          } else if (requestVersion === investigationVersion.current) {
+            setActionProposal(await proposalResponse.json());
+          }
+        }
       } else {
         const result: Investigation = await response.json();
         if (requestVersion !== investigationVersion.current) return;
@@ -236,6 +277,31 @@ export function App() {
         investigationRequest.current = null;
         setInvestigating(false);
       }
+    }
+  }
+
+  async function decideActionProposal(decision: "approve" | "reject") {
+    if (!selected || !actionProposal || decidingProposal) return;
+    setDecidingProposal(true);
+    setProposalError(null);
+    const reference = selected.catalog_id ?? selected.id;
+    try {
+      const response = await fetch(
+        `${apiBaseUrl}/incidents/${reference}/investigation-runs/${actionProposal.investigation_id}/action-proposals/${actionProposal.id}/${decision}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: decision === "reject"
+            ? JSON.stringify({ reason: "Rejected by the human operator." })
+            : undefined,
+        },
+      );
+      if (!response.ok) throw new Error(await investigationErrorMessage(response));
+      setActionProposal(await response.json());
+    } catch (error: unknown) {
+      setProposalError(error instanceof Error ? error.message : "Proposal decision failed");
+    } finally {
+      setDecidingProposal(false);
     }
   }
 
@@ -343,6 +409,27 @@ export function App() {
                         Human action required — this investigation recommends next steps but does not execute remediation.
                       </p>
                     )}
+                  </article>
+                )}
+                {proposalError && <p className="error">{proposalError}</p>}
+                {actionProposal && (
+                  <article className="diagnosis" aria-labelledby="proposed-action">
+                    <h3 id="proposed-action">Proposed Action</h3>
+                    <p><b>Action type:</b> {displayStatus(actionProposal.action_type)}</p>
+                    <p><b>Target:</b> {actionProposal.target}</p>
+                    <p><b>Rationale:</b> {actionProposal.rationale}</p>
+                    <p><b>Risk level:</b> {actionProposal.risk_level}</p>
+                    <p><b>Supporting evidence:</b> {actionProposal.supporting_evidence_ids.map((id) => `#${id}`).join(", ")}</p>
+                    <p><b>Approval state:</b> {displayStatus(actionProposal.approval_status)}</p>
+                    {actionProposal.approval_status === "pending" && (
+                      <div className="actions">
+                        <button disabled={decidingProposal} onClick={() => decideActionProposal("approve")}>Approve</button>
+                        <button disabled={decidingProposal} onClick={() => decideActionProposal("reject")}>Reject</button>
+                      </div>
+                    )}
+                    <p className="human-control">
+                      Approval records a human decision for a future controlled execution step. No remediation is executed here.
+                    </p>
                   </article>
                 )}
                 {steps.length > 0 && (

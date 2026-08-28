@@ -48,6 +48,53 @@ const deterministicEvidence = {
   created_at: "2026-08-28T12:10:00Z",
 };
 
+const actionableExecution = {
+  investigation: {
+    id: 20,
+    incident_id: 1,
+    mode: "manual_responses",
+    status: "completed",
+    model: "gpt-test",
+    response_id: "response-test",
+    result: {
+      status: "completed",
+      summary: "Disk pressure confirmed.",
+      diagnosis: "A controlled application reset may be appropriate.",
+      confidence: 0.91,
+      supporting_evidence: ["Disk usage is 94%."],
+      evidence_ids: [10],
+      recommended_next_steps: ["Review the proposed reset."],
+      missing_information: [],
+      human_action_required: true,
+      proposed_action: {
+        action_type: "reset_simulated_application_state",
+        target: "SUPPORT-API",
+        parameters: {},
+        rationale: "Reset the simulated state after operator review.",
+        supporting_evidence_ids: [10],
+        risk_level: "medium",
+      },
+    },
+    usage: { input_tokens: 10, output_tokens: 20, total_tokens: 30, response_iterations: 1 },
+    error: null,
+    created_at: "2026-08-28T12:10:00Z",
+    completed_at: "2026-08-28T12:11:00Z",
+  },
+  evidence: [{ ...deterministicEvidence, investigation_id: 20, origin: "ai" }],
+  steps: [],
+};
+
+const pendingProposal = {
+  id: 40,
+  investigation_id: 20,
+  incident_id: 1,
+  ...actionableExecution.investigation.result.proposed_action,
+  approval_status: "pending",
+  created_at: "2026-08-28T12:12:00Z",
+  decision_at: null,
+  rejection_reason: null,
+};
+
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
@@ -58,9 +105,9 @@ function jsonResponse(body: unknown, status = 200): Response {
 function installFetch(options?: {
   coreFailure?: boolean;
   aiConfigured?: boolean;
-  post?: (url: string) => Promise<Response>;
+  post?: (url: string, init?: RequestInit) => Promise<Response>;
 }) {
-  const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     if (url.endsWith("/health")) {
       return options?.coreFailure
@@ -71,7 +118,7 @@ function installFetch(options?: {
     if (url.endsWith("/ai/config")) {
       return jsonResponse({ configured: options?.aiConfigured ?? false });
     }
-    if (options?.post) return options.post(url);
+    if (options?.post) return options.post(url, init);
     throw new Error(`Unexpected request: ${url}`);
   });
   vi.stubGlobal("fetch", fetchMock);
@@ -242,5 +289,45 @@ describe("Agentic SupportOps operator workflow", () => {
       expect(screen.queryByText(/"used_percent": 94/)).not.toBeInTheDocument();
       expect(screen.queryByText("Mode: deterministic")).not.toBeInTheDocument();
     });
+  });
+
+  it.each([
+    ["Approve", "approved"],
+    ["Reject", "rejected"],
+  ])("renders a pending proposal and records %s without execution", async (decision, status) => {
+    installFetch({
+      aiConfigured: true,
+      post: async (url) => {
+        if (url.endsWith("/investigate-ai")) return jsonResponse(actionableExecution);
+        if (url.endsWith("/action-proposals")) return jsonResponse(pendingProposal, 201);
+        if (url.endsWith(`/${decision.toLowerCase()}`)) {
+          return jsonResponse({
+            ...pendingProposal,
+            approval_status: status,
+            decision_at: "2026-08-28T12:13:00Z",
+          });
+        }
+        throw new Error(`Unexpected request: ${url}`);
+      },
+    });
+    render(<App />);
+
+    await selectIncident();
+    await userEvent.click(await screen.findByRole("button", { name: "Run AI investigation" }));
+
+    expect(await screen.findByRole("heading", { name: "Proposed Action" })).toBeVisible();
+    expect(screen.getByText("Action type:").closest("p")).toHaveTextContent("reset simulated application state");
+    expect(screen.getByText("Supporting evidence:").closest("p")).toHaveTextContent("#10");
+    expect(screen.getByText("Approval state:").closest("p")).toHaveTextContent("pending");
+    expect(screen.queryByRole("button", { name: /execute/i })).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: decision }));
+
+    await waitFor(() => {
+      expect(screen.getByText("Approval state:").closest("p")).toHaveTextContent(status);
+    });
+    expect(screen.queryByRole("button", { name: "Approve" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Reject" })).not.toBeInTheDocument();
+    expect(screen.getByText(/No remediation is executed here/)).toBeVisible();
   });
 });

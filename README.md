@@ -15,6 +15,7 @@ This is not a general-purpose chatbot. The unit of work is an incident. An inves
 - Canonical `InvestigationToolRegistry` for definitions, exact argument validation, execution, and normalized results.
 - Direct execution by default and an opt-in local MCP stdio transport for three allowlisted capabilities.
 - SQLAlchemy/SQLite persistence with append-oriented run/event history, concurrency protection, and atomic terminal persistence.
+- Structured, allowlisted action proposals with durable pending/approved/rejected human decisions; approval does not execute remediation.
 - Optional application-owned OpenTelemetry spans; persisted events remain the domain source of truth.
 - Isolated backend tests and CI gates for backend, MCP, TypeScript, and production builds.
 
@@ -68,7 +69,7 @@ The frontend never talks to MCP directly; it calls FastAPI. MCP is an internal a
 7. A structured result completes the run, or a controlled failure marks it failed. Without useful evidence, the result becomes `insufficient_evidence` rather than presenting unsupported certainty. The terminal event and run transition share one transaction.
 8. Latest endpoints keep compatibility; historical endpoints retrieve prior runs, event timelines, and run-scoped artifacts explicitly.
 
-Models produce diagnoses and recommendations only. The project does not execute remediation or approval-gated write actions.
+Models produce diagnoses, recommendations, and optional structured action proposals. The application validates proposal types, parameters, investigation ownership, and evidence references before a human may approve or reject. Approval is audited state only; the project does not execute remediation or approval-gated write actions.
 
 ## 🔌 Direct and MCP execution
 

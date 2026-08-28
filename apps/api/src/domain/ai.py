@@ -5,6 +5,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from domain.investigation import EvidenceRead, InvestigationStepRead
+from domain.action_proposal import ModelActionProposal
 
 
 class AIInvestigationStatus(StrEnum):
@@ -30,6 +31,9 @@ class InvestigationEventType(StrEnum):
     FINAL_OUTPUT = "final_output"
     RUN_COMPLETED = "run_completed"
     RUN_FAILED = "run_failed"
+    ACTION_PROPOSAL_CREATED = "action_proposal_created"
+    ACTION_PROPOSAL_APPROVED = "action_proposal_approved"
+    ACTION_PROPOSAL_REJECTED = "action_proposal_rejected"
 
 
 class AIInvestigationResult(BaseModel):
@@ -44,6 +48,7 @@ class AIInvestigationResult(BaseModel):
     recommended_next_steps: list[str]
     missing_information: list[str]
     human_action_required: bool
+    proposed_action: ModelActionProposal | None
 
     @model_validator(mode="before")
     @classmethod
@@ -52,6 +57,7 @@ class AIInvestigationResult(BaseModel):
             value = dict(value)
             value.setdefault("evidence_ids", [])
             value.setdefault("human_action_required", True)
+            value.setdefault("proposed_action", None)
         return value
 
 

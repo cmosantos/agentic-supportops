@@ -15,13 +15,30 @@ from domain.investigation import (
     InvestigationRead,
     InvestigationStepRead,
 )
+from domain.action_proposal import (
+    ActionProposalCreate,
+    ActionProposalRead,
+    ActionRejection,
+)
 from repositories.incident_repository import IncidentRepository
 from repositories.investigation_repository import ActiveInvestigationExistsError, InvestigationRepository
+from repositories.action_proposal_repository import (
+    ActionProposalRepository,
+    InvalidApprovalTransitionError,
+)
 from services.incident_service import IncidentService
 from integrations.responses_gateway import ResponsesGateway
 from integrations.mcp_client import build_investigation_tools
 from services.ai_investigation_service import AIInvestigationError, AIInvestigationService
 from services.agents_sdk_investigation_service import AgentsSDKInvestigationService
+from services.action_proposal_service import (
+    ActionProposalEligibilityError,
+    ActionProposalEvidenceError,
+    ActionProposalNotFoundError,
+    ActionProposalService,
+    InvalidActionProposalError,
+    InvalidActionTypeError,
+)
 from services.tool_registry import InvestigationToolRegistry
 from services.investigation_service import (
     InvalidInvestigationContextError,
@@ -344,8 +361,115 @@ def get_historical_investigation_artifacts(
     )
 
 
+@router.get(
+    "/incidents/{incident_id}/investigation-runs/{investigation_id}/action-proposals",
+    response_model=list[ActionProposalRead],
+)
+def list_action_proposals(
+    incident_id: str, investigation_id: int, session: DatabaseSession
+) -> list[ActionProposalRead]:
+    investigation = _investigation_or_404(incident_id, investigation_id, session)
+    return _action_proposal_service(session).list(investigation)
+
+
+@router.post(
+    "/incidents/{incident_id}/investigation-runs/{investigation_id}/action-proposals",
+    response_model=ActionProposalRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_action_proposal(
+    incident_id: str,
+    investigation_id: int,
+    payload: ActionProposalCreate,
+    session: DatabaseSession,
+) -> ActionProposalRead:
+    investigation = _investigation_or_404(incident_id, investigation_id, session)
+    try:
+        return _action_proposal_service(session).create(investigation, payload)
+    except InvalidActionTypeError as error:
+        raise _proposal_error(status.HTTP_422_UNPROCESSABLE_CONTENT, "invalid_action_type", error)
+    except InvalidActionProposalError as error:
+        raise _proposal_error(status.HTTP_422_UNPROCESSABLE_CONTENT, "invalid_action_parameters", error)
+    except ActionProposalEvidenceError as error:
+        raise _proposal_error(status.HTTP_422_UNPROCESSABLE_CONTENT, "evidence_mismatch", error)
+    except ActionProposalEligibilityError as error:
+        raise _proposal_error(status.HTTP_409_CONFLICT, "investigation_not_eligible", error)
+
+
+@router.post(
+    "/incidents/{incident_id}/investigation-runs/{investigation_id}/action-proposals/{proposal_id}/approve",
+    response_model=ActionProposalRead,
+)
+def approve_action_proposal(
+    incident_id: str,
+    investigation_id: int,
+    proposal_id: int,
+    session: DatabaseSession,
+) -> ActionProposalRead:
+    investigation = _investigation_or_404(incident_id, investigation_id, session)
+    try:
+        return _action_proposal_service(session).approve(investigation, proposal_id)
+    except ActionProposalNotFoundError as error:
+        raise _proposal_error(status.HTTP_404_NOT_FOUND, "action_proposal_not_found", error)
+    except InvalidApprovalTransitionError as error:
+        raise _proposal_error(status.HTTP_409_CONFLICT, "proposal_already_decided", error)
+
+
+@router.post(
+    "/incidents/{incident_id}/investigation-runs/{investigation_id}/action-proposals/{proposal_id}/reject",
+    response_model=ActionProposalRead,
+)
+def reject_action_proposal(
+    incident_id: str,
+    investigation_id: int,
+    proposal_id: int,
+    payload: ActionRejection,
+    session: DatabaseSession,
+) -> ActionProposalRead:
+    investigation = _investigation_or_404(incident_id, investigation_id, session)
+    try:
+        return _action_proposal_service(session).reject(
+            investigation, proposal_id, payload.reason
+        )
+    except ActionProposalNotFoundError as error:
+        raise _proposal_error(status.HTTP_404_NOT_FOUND, "action_proposal_not_found", error)
+    except InvalidApprovalTransitionError as error:
+        raise _proposal_error(status.HTTP_409_CONFLICT, "proposal_already_decided", error)
+
+
 def _mode_for_runtime(runtime: InvestigationRuntime) -> str:
     return "ai" if runtime == InvestigationRuntime.MANUAL_RESPONSES else "agents_sdk"
+
+
+def _action_proposal_service(session: Session) -> ActionProposalService:
+    return ActionProposalService(
+        ActionProposalRepository(session), InvestigationRepository(session)
+    )
+
+
+def _investigation_or_404(
+    incident_id: str, investigation_id: int, session: Session
+):
+    incident = _incident_or_404(incident_id, session)
+    investigation = InvestigationRepository(session).get_ai_run_by_id(
+        incident.id, investigation_id
+    )
+    if investigation is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "investigation_run_not_found",
+                "message": "Investigation run not found",
+            },
+        )
+    return investigation
+
+
+def _proposal_error(status_code: int, code: str, error: Exception) -> HTTPException:
+    return HTTPException(
+        status_code=status_code,
+        detail={"code": code, "message": str(error)},
+    )
 
 
 def _agents_sdk_service(

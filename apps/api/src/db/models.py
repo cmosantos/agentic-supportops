@@ -7,6 +7,7 @@ from db.base import Base
 from domain.incident import IncidentPriority, IncidentStatus
 from domain.investigation import InvestigationOrigin, InvestigationStepStatus
 from domain.ai import AIInvestigationStatus, InvestigationEventType, InvestigationRuntime
+from domain.action_proposal import ActionRisk, ActionType, ApprovalStatus
 
 
 class IncidentRecord(Base):
@@ -144,3 +145,33 @@ class InvestigationEventRecord(Base):
         DateTime(timezone=True), server_default=func.now()
     )
     event_metadata: Mapped[dict] = mapped_column("metadata", JSON, default=dict)
+
+
+class ActionProposalRecord(Base):
+    __tablename__ = "action_proposals"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    investigation_id: Mapped[int] = mapped_column(
+        ForeignKey("ai_investigations.id"), index=True
+    )
+    incident_id: Mapped[int] = mapped_column(ForeignKey("incidents.id"), index=True)
+    action_type: Mapped[ActionType] = mapped_column(
+        Enum(ActionType, native_enum=False), index=True
+    )
+    target: Mapped[str] = mapped_column(String(100))
+    parameters: Mapped[dict] = mapped_column(JSON)
+    rationale: Mapped[str] = mapped_column(Text)
+    supporting_evidence_ids: Mapped[list[int]] = mapped_column(JSON)
+    risk_level: Mapped[ActionRisk] = mapped_column(
+        Enum(ActionRisk, native_enum=False), index=True
+    )
+    approval_status: Mapped[ApprovalStatus] = mapped_column(
+        Enum(ApprovalStatus, native_enum=False),
+        default=ApprovalStatus.PENDING,
+        index=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    decision_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    rejection_reason: Mapped[str | None] = mapped_column(Text)

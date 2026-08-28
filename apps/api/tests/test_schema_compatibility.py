@@ -74,6 +74,7 @@ def test_fresh_sqlite_database_remains_supported(tmp_path) -> None:
     Base.metadata.create_all(engine)
     assert "ai_investigations" in inspect(engine).get_table_names()
     assert "investigation_events" in inspect(engine).get_table_names()
+    assert "action_proposals" in inspect(engine).get_table_names()
     engine.dispose()
 
 
