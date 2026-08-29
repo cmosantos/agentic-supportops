@@ -99,6 +99,25 @@ AI Investigator -> Proposal -> Human Approval -> Execution Policy
 
 SQLite enforces one `outcome_verifications` row per execution. Requested/started events and the terminal verification state/event follow the existing transactional event pattern. Repeated requests return the canonical record without observing again. A verified outcome is human-visible evidence only: **`VERIFIED` does not automatically mean `INCIDENT RESOLVED`** and does not alter proposal, approval, execution, or incident history.
 
+## 👤 Human resolution gate
+
+```text
+Execution COMPLETED != Verification VERIFIED != Incident RESOLVED
+```
+
+Execution proves that an approved action completed. Verification independently proves whether the expected technical outcome was observed. Resolution records a separate human operational decision that the incident may be closed.
+
+```text
+AI Investigator -> Proposal -> Human Approval -> Controlled Execution
+                -> Independent Verification -> Verification Evidence
+                -> Human Resolution Gate -> KEEP_OPEN
+                                         -> RESOLVE -> Incident RESOLVED
+```
+
+The resolution API accepts only a persisted `verification_id`, `RESOLVE` or `KEEP_OPEN`, and an optional bounded reason. The server derives and validates the verification, execution, proposal, and incident ownership chain. `RESOLVE` requires `VERIFIED` evidence; `KEEP_OPEN` records a valid human review without changing incident status. A verified observation alone never changes the incident.
+
+One canonical review is allowed per verification, and SQLite permits at most one effective `RESOLVE` record per incident. The decision, incident transition, and audit events commit atomically. No model, agent, MCP tool, remediation capability, shell, subprocess, or external service participates in resolution.
+
 ## 🔌 Direct and MCP execution
 
 `TOOL_TRANSPORT=direct` is the default for Responses API and Agents SDK investigations:
@@ -134,6 +153,7 @@ MCP is not the product API: HTTP endpoints serve the UI and application clients,
 - The terminal event is flushed without committing; the corresponding run transition commits both or rolls both back.
 - Each proposal has at most one execution record; terminal execution state and terminal audit event commit together.
 - Each completed execution has at most one outcome verification; terminal verification state and event commit together.
+- Each verification has at most one human resolution review; the final resolution decision, incident transition, and events commit together.
 - Latest APIs retain existing semantics. History APIs list runs newest-first and expose events by stable `investigation_id`.
 - Model-guided evidence and steps are linked to their `AIInvestigationRecord`; `/incidents/{incident}/investigation-runs/{investigation_id}/artifacts` resolves the exact evidence behind an older result.
 
@@ -273,6 +293,8 @@ FastAPI exposes the complete interactive contract at `/docs`.
 | Controlled execution | `POST /incidents/{incident_id}/investigation-runs/{run_id}/action-proposals/{proposal_id}/execute` |
 | Verify completed execution | `POST /action-executions/{execution_id}/verify` |
 | Read canonical verification | `GET /action-executions/{execution_id}/verification` |
+| Record human resolution review | `POST /incidents/{incident_id}/resolution-decisions` |
+| Read resolution history | `GET /incidents/{incident_id}/resolution-decisions` |
 
 References such as `INC-014` and numeric IDs are accepted where `{incident_id}` appears.
 

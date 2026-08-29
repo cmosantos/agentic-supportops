@@ -10,6 +10,7 @@ from domain.ai import AIInvestigationStatus, InvestigationEventType, Investigati
 from domain.action_proposal import ActionRisk, ActionType, ApprovalStatus
 from domain.action_execution import ActionExecutionStatus
 from domain.outcome_verification import OutcomeVerificationStatus
+from domain.incident_resolution import ResolutionDecision
 
 
 class IncidentRecord(Base):
@@ -229,3 +230,37 @@ class OutcomeVerificationRecord(Base):
     observed_outcome: Mapped[dict | None] = mapped_column(JSON)
     evidence: Mapped[dict | None] = mapped_column(JSON)
     error: Mapped[dict | None] = mapped_column(JSON)
+
+
+class IncidentResolutionDecisionRecord(Base):
+    __tablename__ = "incident_resolution_decisions"
+    __table_args__ = (
+        UniqueConstraint("verification_id"),
+        Index(
+            "uq_incident_final_resolution",
+            "incident_id",
+            unique=True,
+            sqlite_where=text("decision = 'RESOLVE'"),
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    incident_id: Mapped[int] = mapped_column(
+        ForeignKey("incidents.id"), nullable=False, index=True
+    )
+    verification_id: Mapped[int] = mapped_column(
+        ForeignKey("outcome_verifications.id"), nullable=False
+    )
+    execution_id: Mapped[int] = mapped_column(
+        ForeignKey("action_executions.id"), nullable=False, index=True
+    )
+    proposal_id: Mapped[int] = mapped_column(
+        ForeignKey("action_proposals.id"), nullable=False, index=True
+    )
+    decision: Mapped[ResolutionDecision] = mapped_column(
+        Enum(ResolutionDecision, native_enum=False), nullable=False, index=True
+    )
+    reason: Mapped[str | None] = mapped_column(Text)
+    decided_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )

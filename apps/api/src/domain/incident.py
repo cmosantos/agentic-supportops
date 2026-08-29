@@ -20,6 +20,8 @@ class IncidentStatus(StrEnum):
 
 
 class IncidentCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     title: str = Field(min_length=1, max_length=200)
     description: str = Field(min_length=1)
     category: str = Field(min_length=1, max_length=100)

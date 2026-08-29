@@ -96,6 +96,16 @@ type OutcomeVerification = {
   evidence: Record<string, unknown> | null;
   error: { code: string; message: string } | null;
 };
+type IncidentResolutionDecision = {
+  id: number;
+  incident_id: number;
+  verification_id: number;
+  execution_id: number;
+  proposal_id: number;
+  decision: "resolve" | "keep_open";
+  reason: string | null;
+  decided_at: string;
+};
 type Investigation = {
   incident_id: number;
   catalog_id: string | null;
@@ -175,6 +185,9 @@ export function App() {
   const [executingAction, setExecutingAction] = useState(false);
   const [outcomeVerification, setOutcomeVerification] = useState<OutcomeVerification | null>(null);
   const [verifyingOutcome, setVerifyingOutcome] = useState(false);
+  const [resolutionDecisions, setResolutionDecisions] = useState<IncidentResolutionDecision[]>([]);
+  const [resolutionReason, setResolutionReason] = useState("");
+  const [decidingResolution, setDecidingResolution] = useState(false);
   const investigationRequest = useRef<AbortController | null>(null);
   const investigationVersion = useRef(0);
 
@@ -238,9 +251,22 @@ export function App() {
     setExecutingAction(false);
     setOutcomeVerification(null);
     setVerifyingOutcome(false);
+    setResolutionDecisions([]);
+    setResolutionReason("");
+    setDecidingResolution(false);
     setMode(null);
     setInvestigationError(null);
     setInvestigating(false);
+    const selectionVersion = investigationVersion.current;
+    const reference = incident.catalog_id ?? incident.id;
+    void fetch(`${apiBaseUrl}/incidents/${reference}/resolution-decisions`)
+      .then(async (response) => response.ok ? response.json() : [])
+      .then((decisions: IncidentResolutionDecision[]) => {
+        if (selectionVersion === investigationVersion.current) {
+          setResolutionDecisions(decisions);
+        }
+      })
+      .catch(() => undefined);
   }
 
   async function runInvestigation(investigationMode: InvestigationMode) {
@@ -261,6 +287,9 @@ export function App() {
     setExecutingAction(false);
     setOutcomeVerification(null);
     setVerifyingOutcome(false);
+    setResolutionDecisions([]);
+    setResolutionReason("");
+    setDecidingResolution(false);
     setMode(investigationMode);
 
     try {
@@ -398,6 +427,47 @@ export function App() {
     }
   }
 
+  async function decideResolution(decision: "resolve" | "keep_open") {
+    if (
+      !selected ||
+      !outcomeVerification ||
+      decidingResolution ||
+      resolutionDecisions.some((item) => item.verification_id === outcomeVerification.id)
+    ) return;
+    setDecidingResolution(true);
+    setProposalError(null);
+    const reference = selected.catalog_id ?? selected.id;
+    try {
+      const response = await fetch(
+        `${apiBaseUrl}/incidents/${reference}/resolution-decisions`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            verification_id: outcomeVerification.id,
+            decision,
+            reason: resolutionReason.trim() || null,
+          }),
+        },
+      );
+      if (!response.ok) throw new Error(await investigationErrorMessage(response));
+      const resolution: IncidentResolutionDecision = await response.json();
+      setResolutionDecisions((current) =>
+        current.some((item) => item.id === resolution.id) ? current : [...current, resolution]
+      );
+      if (resolution.decision === "resolve") {
+        setSelected((current) => current ? { ...current, status: "resolved" } : current);
+        setIncidents((current) => current.map((item) =>
+          item.id === resolution.incident_id ? { ...item, status: "resolved" } : item
+        ));
+      }
+    } catch (error: unknown) {
+      setProposalError(error instanceof Error ? error.message : "Resolution decision failed");
+    } finally {
+      setDecidingResolution(false);
+    }
+  }
+
   return (
     <main>
       <section className="shell">
@@ -433,6 +503,7 @@ export function App() {
               <>
                 <h2>{selected.title}</h2>
                 <p>{selected.description}</p>
+                <p><b>Incident status:</b> {selected.status.toUpperCase()}</p>
                 <p className="metadata">
                   {selected.category} · {selected.priority} · {selected.affected_resource_id}
                 </p>
@@ -559,12 +630,52 @@ export function App() {
                         {outcomeVerification.error && (
                           <p className="error">{outcomeVerification.error.message}</p>
                         )}
+                        {outcomeVerification.status === "not_verified" && (
+                          <p className="human-control">Incident remains open because the expected outcome was not observed.</p>
+                        )}
+                        {outcomeVerification.status === "failed" && (
+                          <p className="human-control">Reliable post-execution evidence could not be collected. Incident remains open.</p>
+                        )}
                       </section>
                     )}
+                    {outcomeVerification?.status === "verified" &&
+                      selected.status !== "resolved" &&
+                      !resolutionDecisions.some((item) => item.verification_id === outcomeVerification.id) && (
+                        <section className="result-section" aria-label="Resolution review">
+                          <h4>Resolution Review</h4>
+                          <label htmlFor="resolution-reason">Reason</label>
+                          <textarea
+                            id="resolution-reason"
+                            maxLength={1000}
+                            value={resolutionReason}
+                            onChange={(event) => setResolutionReason(event.target.value)}
+                          />
+                          <div className="actions" aria-busy={decidingResolution}>
+                            <button disabled={decidingResolution} onClick={() => decideResolution("resolve")}>
+                              {decidingResolution ? "Recording decision…" : "Resolve incident"}
+                            </button>
+                            <button disabled={decidingResolution} onClick={() => decideResolution("keep_open")}>
+                              Keep open
+                            </button>
+                          </div>
+                        </section>
+                      )}
                     <p className="human-control">
                       Approval permits one attempt of this exact action; execution remains policy-controlled and deterministic.
                     </p>
                   </article>
+                )}
+                {resolutionDecisions.length > 0 && (
+                  <section className="result-section" aria-label="Resolution history">
+                    <h3>Resolution History</h3>
+                    {resolutionDecisions.map((decision) => (
+                      <article key={decision.id}>
+                        <p><b>Decision:</b> {displayStatus(decision.decision).toUpperCase()}</p>
+                        <p><b>Verification evidence:</b> #{decision.verification_id}</p>
+                        {decision.reason && <p><b>Reason:</b> {decision.reason}</p>}
+                      </article>
+                    ))}
+                  </section>
                 )}
                 {steps.length > 0 && (
                   <section className="result-section" aria-labelledby="investigation-steps">

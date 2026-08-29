@@ -141,6 +141,17 @@ const verifiedOutcome = {
   error: null,
 } as const;
 
+const resolvedDecision = {
+  id: 70,
+  incident_id: 1,
+  verification_id: 60,
+  execution_id: 50,
+  proposal_id: 40,
+  decision: "resolve",
+  reason: "Post-execution verification confirms service recovery.",
+  decided_at: "2026-08-28T12:16:00Z",
+} as const;
+
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
@@ -151,6 +162,8 @@ function jsonResponse(body: unknown, status = 200): Response {
 function installFetch(options?: {
   coreFailure?: boolean;
   aiConfigured?: boolean;
+  incidentsOverride?: readonly unknown[];
+  resolution?: (url: string, init?: RequestInit) => Promise<Response>;
   post?: (url: string, init?: RequestInit) => Promise<Response>;
 }) {
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -160,9 +173,12 @@ function installFetch(options?: {
         ? jsonResponse({ detail: "unavailable" }, 503)
         : jsonResponse({ status: "ok", service: "agentic-supportops" });
     }
-    if (url.endsWith("/incidents")) return jsonResponse(incidents);
+    if (url.endsWith("/incidents")) return jsonResponse(options?.incidentsOverride ?? incidents);
     if (url.endsWith("/ai/config")) {
       return jsonResponse({ configured: options?.aiConfigured ?? false });
+    }
+    if (url.endsWith("/resolution-decisions")) {
+      return options?.resolution ? options.resolution(url, init) : jsonResponse([]);
     }
     if (options?.post) return options.post(url, init);
     throw new Error(`Unexpected request: ${url}`);
@@ -490,6 +506,12 @@ describe("Agentic SupportOps operator workflow", () => {
       expect(screen.getByText("Observed:").closest("p")).toHaveTextContent(observed.toUpperCase());
     }
     if (error) expect(screen.getByText(error)).toBeVisible();
+    if (status === "verified") {
+      expect(screen.getByRole("button", { name: "Resolve incident" })).toBeVisible();
+      expect(screen.getByRole("button", { name: "Keep open" })).toBeVisible();
+    } else {
+      expect(screen.queryByRole("button", { name: "Resolve incident" })).not.toBeInTheDocument();
+    }
     expect(screen.queryByRole("button", { name: "Verify outcome" })).not.toBeInTheDocument();
     expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith("/verify"))).toHaveLength(1);
   });
@@ -515,5 +537,120 @@ describe("Agentic SupportOps operator workflow", () => {
     expect((await screen.findByText("Verification status:")).closest("p")).toHaveTextContent("VERIFIED");
     expect(screen.queryByRole("button", { name: "Verify outcome" })).not.toBeInTheDocument();
     expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith("/verify"))).toHaveLength(0);
+  });
+
+  it("does not expose resolution actions for a RUNNING verification", async () => {
+    installFetch({
+      aiConfigured: true,
+      resolution: async () => jsonResponse([]),
+      post: async (url) => {
+        if (url.endsWith("/investigate-ai")) return jsonResponse(actionableExecution);
+        if (url.endsWith("/action-proposals")) return jsonResponse(executableProposal, 201);
+        if (url.endsWith("/approve")) return jsonResponse({ ...executableProposal, approval_status: "approved" });
+        if (url.endsWith("/execute")) return jsonResponse(completedExecution);
+        if (url.endsWith("/verification")) return jsonResponse({ ...verifiedOutcome, status: "running", completed_at: null });
+        throw new Error(`Unexpected request: ${url}`);
+      },
+    });
+    render(<App />);
+    await selectIncident();
+    await userEvent.click(await screen.findByRole("button", { name: "Run AI investigation" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Approve" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Execute approved action" }));
+
+    expect((await screen.findByText("Verification status:")).closest("p")).toHaveTextContent("RUNNING");
+    expect(screen.queryByRole("button", { name: "Resolve incident" })).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ["resolve", "resolved"],
+    ["keep_open", "open"],
+  ] as const)("records human %s with an optional reason", async (decision, expectedIncidentStatus) => {
+    const fetchMock = installFetch({
+      aiConfigured: true,
+      resolution: async (_url, init) => init?.method === "POST"
+        ? jsonResponse({
+            ...resolvedDecision,
+            decision,
+            reason: "Operator reviewed stable health.",
+          })
+        : jsonResponse([]),
+      post: async (url, init) => {
+        if (url.endsWith("/investigate-ai")) return jsonResponse(actionableExecution);
+        if (url.endsWith("/action-proposals")) return jsonResponse(executableProposal, 201);
+        if (url.endsWith("/approve")) return jsonResponse({ ...executableProposal, approval_status: "approved" });
+        if (url.endsWith("/execute")) return jsonResponse(completedExecution);
+        if (url.endsWith("/verification")) return jsonResponse(verifiedOutcome);
+        throw new Error(`Unexpected request: ${url}`);
+      },
+    });
+    render(<App />);
+    await selectIncident();
+    await userEvent.click(await screen.findByRole("button", { name: "Run AI investigation" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Approve" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Execute approved action" }));
+    await screen.findByText("Verification status:");
+    await userEvent.type(screen.getByLabelText("Reason"), "Operator reviewed stable health.");
+    await userEvent.click(screen.getByRole("button", {
+      name: decision === "resolve" ? "Resolve incident" : "Keep open",
+    }));
+
+    expect((await screen.findByText("Decision:")).closest("p")).toHaveTextContent(
+      decision.replace("_", " ").toUpperCase(),
+    );
+    expect(screen.getByText("Reason:").closest("p")).toHaveTextContent("Operator reviewed stable health.");
+    expect(screen.getByText("Incident status:").closest("p")).toHaveTextContent(expectedIncidentStatus.toUpperCase());
+    expect(screen.queryByRole("button", { name: "Resolve incident" })).not.toBeInTheDocument();
+    const request = fetchMock.mock.calls.find(([url, init]) =>
+      String(url).endsWith("/resolution-decisions") && init?.method === "POST"
+    );
+    expect(JSON.parse(String(request?.[1]?.body))).toEqual({
+      verification_id: 60,
+      decision,
+      reason: "Operator reviewed stable health.",
+    });
+  });
+
+  it("hydrates persisted RESOLVE history and does not expose Resolve again", async () => {
+    installFetch({
+      incidentsOverride: [{ ...incidents[0], status: "resolved" }, incidents[1]],
+      resolution: async () => jsonResponse([resolvedDecision]),
+      post: async (url) => {
+        throw new Error(`Unexpected request: ${url}`);
+      },
+    });
+    render(<App />);
+    await selectIncident();
+
+    expect((await screen.findByText("Decision:")).closest("p")).toHaveTextContent("RESOLVE");
+    expect(screen.getByText("Incident status:").closest("p")).toHaveTextContent("RESOLVED");
+    expect(screen.queryByRole("button", { name: "Resolve incident" })).not.toBeInTheDocument();
+  });
+
+  it("keeps the incident unchanged when resolution API rejects the decision", async () => {
+    installFetch({
+      aiConfigured: true,
+      resolution: async (_url, init) => init?.method === "POST"
+        ? jsonResponse({ detail: { code: "resolution_not_eligible", message: "Resolution rejected" } }, 409)
+        : jsonResponse([]),
+      post: async (url, init) => {
+        if (url.endsWith("/investigate-ai")) return jsonResponse(actionableExecution);
+        if (url.endsWith("/action-proposals")) return jsonResponse(executableProposal, 201);
+        if (url.endsWith("/approve")) return jsonResponse({ ...executableProposal, approval_status: "approved" });
+        if (url.endsWith("/execute")) return jsonResponse(completedExecution);
+        if (url.endsWith("/verification")) return jsonResponse(verifiedOutcome);
+        throw new Error(`Unexpected request: ${url}`);
+      },
+    });
+    render(<App />);
+    await selectIncident();
+    await userEvent.click(await screen.findByRole("button", { name: "Run AI investigation" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Approve" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Execute approved action" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Resolve incident" }));
+
+    expect(await screen.findByText("Resolution rejected")).toBeVisible();
+    expect(screen.getByText("Incident status:").closest("p")).toHaveTextContent("OPEN");
+    expect(screen.getByRole("button", { name: "Resolve incident" })).toBeVisible();
   });
 });

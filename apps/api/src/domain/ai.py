@@ -43,6 +43,9 @@ class InvestigationEventType(StrEnum):
     VERIFICATION_VERIFIED = "verification_verified"
     VERIFICATION_NOT_VERIFIED = "verification_not_verified"
     VERIFICATION_FAILED = "verification_failed"
+    RESOLUTION_REVIEWED = "resolution_reviewed"
+    INCIDENT_RESOLVED = "incident_resolved"
+    INCIDENT_KEPT_OPEN = "incident_kept_open"
 
 
 class AIInvestigationResult(BaseModel):

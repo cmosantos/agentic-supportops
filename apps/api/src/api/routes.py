@@ -22,6 +22,7 @@ from domain.action_proposal import (
 )
 from domain.action_execution import ActionExecutionRead
 from domain.outcome_verification import OutcomeVerificationRead
+from domain.incident_resolution import IncidentResolutionCreate, IncidentResolutionRead
 from repositories.incident_repository import IncidentRepository
 from repositories.investigation_repository import ActiveInvestigationExistsError, InvestigationRepository
 from repositories.action_proposal_repository import (
@@ -30,6 +31,7 @@ from repositories.action_proposal_repository import (
 )
 from repositories.action_execution_repository import ActionExecutionRepository
 from repositories.outcome_verification_repository import OutcomeVerificationRepository
+from repositories.incident_resolution_repository import IncidentResolutionRepository
 from services.incident_service import IncidentService
 from integrations.responses_gateway import ResponsesGateway
 from integrations.mcp_client import build_investigation_tools
@@ -56,6 +58,14 @@ from services.outcome_verification_service import (
     OutcomeVerificationService,
 )
 from services.verification_policy import VerificationPolicy, VerificationPolicyDeniedError
+from services.incident_resolution_service import (
+    IncidentResolutionService,
+    ResolutionDecisionConflictError,
+    ResolutionIncidentNotFoundError,
+    ResolutionNotEligibleError,
+    ResolutionOwnershipError,
+    ResolutionVerificationNotFoundError,
+)
 from services.tool_registry import InvestigationToolRegistry
 from services.investigation_service import (
     InvalidInvestigationContextError,
@@ -541,6 +551,52 @@ def get_action_execution_verification(
         raise _proposal_error(
             status.HTTP_404_NOT_FOUND, "outcome_verification_not_found", error
         )
+
+
+@router.post(
+    "/incidents/{incident_id}/resolution-decisions",
+    response_model=IncidentResolutionRead,
+)
+def decide_incident_resolution(
+    incident_id: str,
+    payload: IncidentResolutionCreate,
+    session: DatabaseSession,
+) -> IncidentResolutionRead:
+    incident = _incident_or_404(incident_id, session)
+    service = IncidentResolutionService(IncidentResolutionRepository(session))
+    try:
+        return service.decide(incident.id, payload)
+    except ResolutionVerificationNotFoundError as error:
+        raise _proposal_error(
+            status.HTTP_404_NOT_FOUND, "outcome_verification_not_found", error
+        )
+    except ResolutionOwnershipError as error:
+        raise _proposal_error(
+            status.HTTP_409_CONFLICT, "verification_incident_mismatch", error
+        )
+    except ResolutionNotEligibleError as error:
+        raise _proposal_error(
+            status.HTTP_409_CONFLICT, "resolution_not_eligible", error
+        )
+    except ResolutionDecisionConflictError as error:
+        raise _proposal_error(
+            status.HTTP_409_CONFLICT, "resolution_decision_conflict", error
+        )
+    except ResolutionIncidentNotFoundError as error:
+        raise _proposal_error(status.HTTP_404_NOT_FOUND, "incident_not_found", error)
+
+
+@router.get(
+    "/incidents/{incident_id}/resolution-decisions",
+    response_model=list[IncidentResolutionRead],
+)
+def list_incident_resolution_decisions(
+    incident_id: str, session: DatabaseSession
+) -> list[IncidentResolutionRead]:
+    incident = _incident_or_404(incident_id, session)
+    return IncidentResolutionService(
+        IncidentResolutionRepository(session)
+    ).list(incident.id)
 
 
 def _mode_for_runtime(runtime: InvestigationRuntime) -> str:

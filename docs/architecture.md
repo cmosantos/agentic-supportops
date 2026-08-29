@@ -182,6 +182,41 @@ The three policies retain distinct trust contexts over one capability catalog:
 | Execution policy | Mutable capability an approved proposal may invoke once. |
 | Verification policy | Deterministic read-only observer used to evaluate a completed execution. |
 
+## Human resolution boundary
+
+```text
+Execution COMPLETED != Verification VERIFIED != Incident RESOLVED
+```
+
+The first fact proves an approved mutation completed. The second proves that an independent observer found the expected technical state. The third is a human operational decision and cannot be inferred from either earlier fact.
+
+```mermaid
+flowchart TD
+    AI[AI Investigator] --> Proposal
+    Proposal --> Approval[Human Approval]
+    Approval --> Execution[Controlled Execution]
+    Execution --> Verification[Independent Verification]
+    Verification --> Evidence[Verification Evidence]
+    Evidence --> Gate[Human Resolution Gate]
+    Gate --> KeepOpen[KEEP_OPEN]
+    Gate --> Resolve[RESOLVE]
+    Resolve --> Resolved[Incident RESOLVED]
+```
+
+`POST /incidents/{incident_id}/resolution-decisions` accepts only the verification being reviewed, a decision, and an optional reason capped at 1,000 characters. The server joins `OutcomeVerification -> ActionExecution -> ActionProposal -> Incident` and rejects missing, inconsistent, or cross-incident evidence. Client-supplied verification status, execution result, proposal ID, target, or incident status are forbidden.
+
+`RESOLVE` requires a persisted `VERIFIED` outcome and performs a compare-and-set from a non-resolved/non-closed incident. `KEEP_OPEN` is a successful historical review and leaves status unchanged. One canonical review is stored per verification; a partial unique SQLite index allows at most one effective `RESOLVE` decision per incident. Duplicate requests return the canonical decision, while conflicting reviews fail closed.
+
+The decision insert, incident transition, `resolution_reviewed`, and `incident_resolved` event share one transaction. `KEEP_OPEN` similarly commits its decision with `resolution_reviewed` and `incident_kept_open`. Resolution never mutates proposal approval, execution, or verification history and invokes no model, agent, MCP transport, tool, or remediation capability.
+
+The project now exposes three deliberate trust boundaries:
+
+| Boundary | Meaning |
+| --- | --- |
+| Investigation | AI may inspect only policy-approved read-only capabilities. |
+| Execution | A mutable capability requires a persisted proposal and explicit human approval. |
+| Resolution | Successful remediation and VERIFIED evidence still require an explicit human resolution decision. |
+
 ## Persistence and transactions
 
 Run records are append-oriented history. Latest lookups order by descending run ID; history lists all runs newest-first. Historical events are explicitly run-scoped.
@@ -192,6 +227,8 @@ SQLite enforces:
 UNIQUE (incident_id, mode) WHERE status = 'RUNNING'
 UNIQUE (action_executions.proposal_id)
 UNIQUE (outcome_verifications.execution_id)
+UNIQUE (incident_resolution_decisions.verification_id)
+UNIQUE (incident_resolution_decisions.incident_id) WHERE decision = 'RESOLVE'
 ```
 
 This permits one manual Responses run and one Agents SDK run for the same incident, while rejecting concurrency within one mode. `IntegrityError` handling rolls back the session before returning a controlled conflict.
