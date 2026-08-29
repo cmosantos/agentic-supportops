@@ -13,7 +13,7 @@ flowchart LR
     API --> Services[Application services]
     Services --> Runtime[Deterministic / Responses / Agents SDK]
     Runtime --> Registry[InvestigationToolRegistry]
-    Registry --> Simulation[Read-only capabilities]
+    Registry --> Simulation[Governed lab capabilities]
     Simulation --> Fixtures[Contoso fixtures]
     Services --> Repository[SQLAlchemy repositories]
     Repository --> Database[(SQLite)]
@@ -31,7 +31,7 @@ The UI launches deterministic and manual Responses API investigations. The Agent
 | `services/` | Orchestration, loop limits, lifecycle rules, and event recording. |
 | `integrations/` | Responses API, Agents SDK, and MCP infrastructure boundaries. |
 | `InvestigationToolRegistry` | Canonical catalog, schemas, exact input validation, execution, and normalized `ToolResult`. |
-| `tools/` | Deterministic read-only capabilities over fixture-backed repositories. |
+| `tools/` | Deterministic investigation capabilities and one bounded lab action over fixture-backed state. |
 | `repositories/` | Persistence queries, transaction ownership, history retrieval, and simulation access. |
 | `db/` | SQLAlchemy records/session and idempotent SQLite compatibility. |
 | `observability/` | Optional OpenTelemetry spans and safe resource attributes. |
@@ -54,7 +54,7 @@ The comparative service creates a `RUNNING` record in mode `agents_sdk`. Applica
 
 ## Tool governance and MCP
 
-The registry contains 20 known read-only tools with explicit schemas. Exact argument names and string values are validated. The model cannot choose arbitrary processes, files, database queries, URLs, headers, or credentials.
+The registry contains 20 investigation tools plus one execution-only lab capability with explicit schemas. Exact argument names and string values are validated. The execution-only capability is excluded from `names`, OpenAI schemas, and MCP discovery, so the model cannot select it. No capability can choose arbitrary processes, files, database queries, URLs, headers, or credentials.
 
 ```text
 DIRECT: Runtime -> InvestigationToolRegistry -> capability
@@ -108,7 +108,44 @@ investigation -> recommendation -> structured action proposal
 
 An action proposal is durable application data linked to the originating `AIInvestigationRecord` and its evidence IDs. The model may suggest only bounded data; the application registry authoritatively accepts `restart_simulated_service`, `unlock_simulated_user`, or `reset_simulated_application_state` with exact parameter shapes. Unknown actions, mismatched evidence, and ineligible investigations fail closed.
 
-Proposal creation and decisions append `action_proposal_created`, `action_proposal_approved`, or `action_proposal_rejected` to the existing investigation event timeline. A decision state and its event share one database transaction. Approval records human intent only: there is no executor, execute endpoint, remediation tool, shell command, operating-system write, arbitrary HTTP request, or write-capable MCP capability.
+Proposal creation and decisions append `action_proposal_created`, `action_proposal_approved`, or `action_proposal_rejected` to the existing investigation event timeline. A decision state and its event share one database transaction. Approval records human intent only and never triggers execution automatically.
+
+## Controlled execution boundary
+
+```text
+AI Investigator
+      |
+      v
+   Proposal
+      |
+      v
+Human Decision
+      |
+ APPROVED only
+      v
+Execution Authorization
+      |
+      v
+Execution Policy
+      |
+      v
+Action Executor
+      |
+      v
+ToolRegistry Capability
+      |
+      v
+Execution Result
+      |
+      v
+Persistence + Audit Events
+```
+
+Human approval does not give the AI unrestricted tool access. It permits one attempt of one persisted proposal. `ExecutionPolicy` independently allows only `restart_simulated_service`; the endpoint accepts no replacement action data, and the executor combines the persisted proposal target with its persisted parameters. It does not call Responses API, Agents SDK, MCP, or any model to reinterpret the action.
+
+The capability operates entirely over the local Contoso application abstraction. For a known application/service it returns a deterministic transition such as `degraded -> healthy`; an unknown target produces a controlled failure. It invokes no shell, subprocess, Windows service manager, Docker, operating-system API, filesystem write, or external HTTP request.
+
+`action_executions.proposal_id` is unique. Creation in `RUNNING` state and the requested/started events commit together. Capability success or failure is recorded as `COMPLETED` or `FAILED`, and the matching terminal event commits in the same transaction. A repeated or concurrent request observes the existing row and cannot invoke the capability twice. Execution failure does not rewrite the historically separate `APPROVED` decision.
 
 ## Persistence and transactions
 
@@ -118,6 +155,7 @@ SQLite enforces:
 
 ```text
 UNIQUE (incident_id, mode) WHERE status = 'RUNNING'
+UNIQUE (action_executions.proposal_id)
 ```
 
 This permits one manual Responses run and one Agents SDK run for the same incident, while rejecting concurrency within one mode. `IntegrityError` handling rolls back the session before returning a controlled conflict.
@@ -147,4 +185,4 @@ Tracing is off by default. Supported local exporters are `none` and `console`; n
 
 The operator chooses the incident and investigation mode. AI is unavailable in the UI without an OpenAI key. Selecting another incident aborts the browser request/view; it is not a server-side cancellation protocol.
 
-There is currently no authentication, remediation executor, remote MCP deployment, background queue, or multi-user control plane. Recommendations may become allowlisted action proposals, but approval is only a persisted human decision and does not execute an action.
+There is currently no authentication, real-system remediation, remote MCP deployment, background queue, or multi-user control plane. Controlled execution is limited to one explicitly approved, deterministic lab action; approval by itself does not execute it.

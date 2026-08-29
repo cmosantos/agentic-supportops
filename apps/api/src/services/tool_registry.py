@@ -7,6 +7,7 @@ from typing import Any
 from domain.investigation import ToolErrorCode, ToolResult
 from simulation.repository import SimulationRepository
 from tools.common import failure
+from tools.actions import ActionTools
 from tools.endpoint import EndpointTools
 from tools.identity import IdentityTools
 from tools.monitoring import MonitoringTools
@@ -42,6 +43,7 @@ class ToolDefinition:
 
 class InvestigationToolRegistry:
     transport = "direct"
+    _execution_only = frozenset({"restart_simulated_service"})
 
     def __init__(self, repository: SimulationRepository | None = None) -> None:
         simulation = repository or SimulationRepository()
@@ -49,10 +51,11 @@ class InvestigationToolRegistry:
         endpoint = EndpointTools(simulation)
         network = NetworkTools(simulation)
         monitoring = MonitoringTools(simulation)
-        self._tools = self._build_definitions(identity, endpoint, network, monitoring)
+        actions = ActionTools(simulation)
+        self._tools = self._build_definitions(identity, endpoint, network, monitoring, actions)
 
     @staticmethod
-    def _build_definitions(identity, endpoint, network, monitoring) -> dict[str, ToolDefinition]:
+    def _build_definitions(identity, endpoint, network, monitoring, actions) -> dict[str, ToolDefinition]:
         return {
             "get_user": ToolDefinition(identity.get_user, "Read a simulated user's factual profile. Read-only.", (("reference", "User ID, display name, or email address."),)),
             "get_account_status": ToolDefinition(identity.get_account_status, "Read whether a simulated user account is enabled or locked. Read-only.", (("user_id", "User identifier."),)),
@@ -74,6 +77,7 @@ class InvestigationToolRegistry:
             "get_metrics": ToolDefinition(monitoring.get_metrics, "Read simulated host CPU, memory, and disk metrics. Read-only.", (("host_id", "Host identifier."),)),
             "get_service_health": ToolDefinition(monitoring.get_service_health, "Read one simulated host service's health. Does not restart or modify it.", (("resource_id", "Host identifier."), ("service_name", "Exact service name."))),
             "get_application_health": ToolDefinition(monitoring.get_application_health, "Read simulated application status, latency, error rate, and connection-pool utilization. Read-only.", (("application_id", "Application identifier."),)),
+            "restart_simulated_service": ToolDefinition(actions.restart_simulated_service, "Restart exactly one service inside the deterministic lab application abstraction. No host process is touched.", (("target", "Simulated application identifier."), ("service_name", "Exact simulated service name."))),
         }
 
     def execute(self, name: str, arguments: dict[str, str]) -> ToolResult:
@@ -89,7 +93,7 @@ class InvestigationToolRegistry:
         self, name: str, raw_arguments: str
     ) -> tuple[dict[str, Any], ToolResult | None]:
         definition = self._tools.get(name)
-        if definition is None:
+        if definition is None or name in self._execution_only:
             return {}, failure(name, "unknown", ToolErrorCode.UNKNOWN_TOOL, f"Unknown tool '{name}'")
         try:
             arguments = json.loads(raw_arguments)
@@ -104,11 +108,11 @@ class InvestigationToolRegistry:
 
     @property
     def names(self) -> tuple[str, ...]:
-        return tuple(self._tools)
+        return tuple(name for name in self._tools if name not in self._execution_only)
 
     @property
     def openai_tools(self) -> list[dict[str, Any]]:
-        return [definition.openai_schema(name) for name, definition in self._tools.items()]
+        return [self._tools[name].openai_schema(name) for name in self.names]
 
     def openai_tools_for(self, names: tuple[str, ...]) -> list[dict[str, Any]]:
         return [self._tools[name].openai_schema(name) for name in names]

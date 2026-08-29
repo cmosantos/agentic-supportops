@@ -70,6 +70,18 @@ type ActionProposal = ActionProposalInput & {
   decision_at: string | null;
   rejection_reason: string | null;
 };
+type ActionExecution = {
+  id: number;
+  proposal_id: number;
+  incident_id: number;
+  capability_name: string;
+  status: "running" | "completed" | "failed";
+  requested_at: string;
+  started_at: string;
+  completed_at: string | null;
+  result: { data?: Record<string, unknown> } | null;
+  error: { code: string; message: string } | null;
+};
 type Investigation = {
   incident_id: number;
   catalog_id: string | null;
@@ -145,6 +157,8 @@ export function App() {
   const [actionProposal, setActionProposal] = useState<ActionProposal | null>(null);
   const [proposalError, setProposalError] = useState<string | null>(null);
   const [decidingProposal, setDecidingProposal] = useState(false);
+  const [actionExecution, setActionExecution] = useState<ActionExecution | null>(null);
+  const [executingAction, setExecutingAction] = useState(false);
   const investigationRequest = useRef<AbortController | null>(null);
   const investigationVersion = useRef(0);
 
@@ -204,6 +218,8 @@ export function App() {
     setAiMetadata(null);
     setActionProposal(null);
     setProposalError(null);
+    setActionExecution(null);
+    setExecutingAction(false);
     setMode(null);
     setInvestigationError(null);
     setInvestigating(false);
@@ -223,6 +239,8 @@ export function App() {
     setAiMetadata(null);
     setActionProposal(null);
     setProposalError(null);
+    setActionExecution(null);
+    setExecutingAction(false);
     setMode(investigationMode);
 
     try {
@@ -302,6 +320,25 @@ export function App() {
       setProposalError(error instanceof Error ? error.message : "Proposal decision failed");
     } finally {
       setDecidingProposal(false);
+    }
+  }
+
+  async function executeApprovedAction() {
+    if (!selected || !actionProposal || executingAction || actionExecution) return;
+    setExecutingAction(true);
+    setProposalError(null);
+    const reference = selected.catalog_id ?? selected.id;
+    try {
+      const response = await fetch(
+        `${apiBaseUrl}/incidents/${reference}/investigation-runs/${actionProposal.investigation_id}/action-proposals/${actionProposal.id}/execute`,
+        { method: "POST" },
+      );
+      if (!response.ok) throw new Error(await investigationErrorMessage(response));
+      setActionExecution(await response.json());
+    } catch (error: unknown) {
+      setProposalError(error instanceof Error ? error.message : "Action execution failed");
+    } finally {
+      setExecutingAction(false);
     }
   }
 
@@ -427,8 +464,29 @@ export function App() {
                         <button disabled={decidingProposal} onClick={() => decideActionProposal("reject")}>Reject</button>
                       </div>
                     )}
+                    {actionProposal.approval_status === "approved" &&
+                      actionProposal.action_type === "restart_simulated_service" &&
+                      !actionExecution && (
+                        <div className="actions" aria-busy={executingAction}>
+                          <button disabled={executingAction} onClick={executeApprovedAction}>
+                            {executingAction ? "Executing…" : "Execute approved action"}
+                          </button>
+                        </div>
+                      )}
+                    {actionExecution && (
+                      <section className="result-section" aria-label="Execution result">
+                        <p><b>Capability:</b> {displayStatus(actionExecution.capability_name)}</p>
+                        <p><b>Execution status:</b> {actionExecution.status.toUpperCase()}</p>
+                        {actionExecution.result?.data && (
+                          <pre>{JSON.stringify(actionExecution.result.data, null, 2)}</pre>
+                        )}
+                        {actionExecution.error && (
+                          <p className="error">{actionExecution.error.message}</p>
+                        )}
+                      </section>
+                    )}
                     <p className="human-control">
-                      Approval records a human decision for a future controlled execution step. No remediation is executed here.
+                      Approval permits one attempt of this exact action; execution remains policy-controlled and deterministic.
                     </p>
                   </article>
                 )}

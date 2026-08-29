@@ -8,6 +8,7 @@ from domain.incident import IncidentPriority, IncidentStatus
 from domain.investigation import InvestigationOrigin, InvestigationStepStatus
 from domain.ai import AIInvestigationStatus, InvestigationEventType, InvestigationRuntime
 from domain.action_proposal import ActionRisk, ActionType, ApprovalStatus
+from domain.action_execution import ActionExecutionStatus
 
 
 class IncidentRecord(Base):
@@ -175,3 +176,27 @@ class ActionProposalRecord(Base):
     )
     decision_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     rejection_reason: Mapped[str | None] = mapped_column(Text)
+
+
+class ActionExecutionRecord(Base):
+    __tablename__ = "action_executions"
+    __table_args__ = (UniqueConstraint("proposal_id"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    proposal_id: Mapped[int] = mapped_column(
+        ForeignKey("action_proposals.id"), nullable=False, index=True
+    )
+    incident_id: Mapped[int] = mapped_column(
+        ForeignKey("incidents.id"), nullable=False, index=True
+    )
+    capability_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    status: Mapped[ActionExecutionStatus] = mapped_column(
+        Enum(ActionExecutionStatus, native_enum=False), nullable=False, index=True
+    )
+    requested_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    result: Mapped[dict | None] = mapped_column(JSON)
+    error: Mapped[dict | None] = mapped_column(JSON)

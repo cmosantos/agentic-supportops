@@ -20,12 +20,14 @@ from domain.action_proposal import (
     ActionProposalRead,
     ActionRejection,
 )
+from domain.action_execution import ActionExecutionRead
 from repositories.incident_repository import IncidentRepository
 from repositories.investigation_repository import ActiveInvestigationExistsError, InvestigationRepository
 from repositories.action_proposal_repository import (
     ActionProposalRepository,
     InvalidApprovalTransitionError,
 )
+from repositories.action_execution_repository import ActionExecutionRepository
 from services.incident_service import IncidentService
 from integrations.responses_gateway import ResponsesGateway
 from integrations.mcp_client import build_investigation_tools
@@ -39,6 +41,12 @@ from services.action_proposal_service import (
     InvalidActionProposalError,
     InvalidActionTypeError,
 )
+from services.action_execution_service import (
+    ActionExecutionNotApprovedError,
+    ActionExecutionNotFoundError,
+    ActionExecutionService,
+)
+from services.execution_policy import ExecutionPolicy, ExecutionPolicyDeniedError
 from services.tool_registry import InvestigationToolRegistry
 from services.investigation_service import (
     InvalidInvestigationContextError,
@@ -435,6 +443,45 @@ def reject_action_proposal(
         raise _proposal_error(status.HTTP_404_NOT_FOUND, "action_proposal_not_found", error)
     except InvalidApprovalTransitionError as error:
         raise _proposal_error(status.HTTP_409_CONFLICT, "proposal_already_decided", error)
+
+
+@router.post(
+    "/incidents/{incident_id}/investigation-runs/{investigation_id}/action-proposals/{proposal_id}/execute",
+    response_model=ActionExecutionRead,
+)
+def execute_action_proposal(
+    incident_id: str,
+    investigation_id: int,
+    proposal_id: int,
+    session: DatabaseSession,
+) -> ActionExecutionRead:
+    investigation = _investigation_or_404(incident_id, investigation_id, session)
+    runtime = (
+        InvestigationRuntime.AGENTS_SDK
+        if investigation.mode == "agents_sdk"
+        else InvestigationRuntime.MANUAL_RESPONSES
+    )
+    service = ActionExecutionService(
+        ActionExecutionRepository(session),
+        ExecutionPolicy(),
+        InvestigationToolRegistry(),
+    )
+    try:
+        return service.execute(
+            investigation.incident_id, investigation.id, proposal_id, runtime
+        )
+    except ActionExecutionNotFoundError as error:
+        raise _proposal_error(
+            status.HTTP_404_NOT_FOUND, "action_proposal_not_found", error
+        )
+    except ActionExecutionNotApprovedError as error:
+        raise _proposal_error(
+            status.HTTP_409_CONFLICT, "proposal_not_approved", error
+        )
+    except ExecutionPolicyDeniedError as error:
+        raise _proposal_error(
+            status.HTTP_403_FORBIDDEN, "execution_policy_denied", error
+        )
 
 
 def _mode_for_runtime(runtime: InvestigationRuntime) -> str:

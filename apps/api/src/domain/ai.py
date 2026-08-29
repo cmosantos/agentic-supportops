@@ -34,6 +34,10 @@ class InvestigationEventType(StrEnum):
     ACTION_PROPOSAL_CREATED = "action_proposal_created"
     ACTION_PROPOSAL_APPROVED = "action_proposal_approved"
     ACTION_PROPOSAL_REJECTED = "action_proposal_rejected"
+    EXECUTION_REQUESTED = "execution_requested"
+    EXECUTION_STARTED = "execution_started"
+    EXECUTION_COMPLETED = "execution_completed"
+    EXECUTION_FAILED = "execution_failed"
 
 
 class AIInvestigationResult(BaseModel):

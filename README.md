@@ -15,11 +15,11 @@ This is not a general-purpose chatbot. The unit of work is an incident. An inves
 - Canonical `InvestigationToolRegistry` for definitions, exact argument validation, execution, and normalized results.
 - Direct execution by default and an opt-in local MCP stdio transport for three allowlisted capabilities.
 - SQLAlchemy/SQLite persistence with append-oriented run/event history, concurrency protection, and atomic terminal persistence.
-- Structured, allowlisted action proposals with durable pending/approved/rejected human decisions; approval does not execute remediation.
+- Structured action proposals, durable human decisions, and one approval-gated lab execution capability with single-execution persistence.
 - Optional application-owned OpenTelemetry spans; persisted events remain the domain source of truth.
 - Isolated backend tests and CI gates for backend, MCP, TypeScript, and production builds.
 
-No real infrastructure is queried. The Contoso environment is deterministic fixture data, and every current tool is read-only.
+No real infrastructure is queried. Investigation tools are read-only; the sole execution capability changes only the deterministic lab result and never touches a host process or service.
 
 ## 🎯 Engineering goals
 
@@ -49,7 +49,7 @@ flowchart TD
     Transport -->|MCP opt-in| Client[MCP client]
     Client -->|stdio| Server[Local MCP server]
     Server --> Registry
-    Registry --> Capabilities[Read-only SupportOps capabilities]
+    Registry --> Capabilities[Governed SupportOps capabilities]
     Services --> Repository[SQLAlchemy repositories]
     Repository --> SQLite[(SQLite)]
     Repository --> History[Runs and ordered events]
@@ -69,7 +69,20 @@ The frontend never talks to MCP directly; it calls FastAPI. MCP is an internal a
 7. A structured result completes the run, or a controlled failure marks it failed. Without useful evidence, the result becomes `insufficient_evidence` rather than presenting unsupported certainty. The terminal event and run transition share one transaction.
 8. Latest endpoints keep compatibility; historical endpoints retrieve prior runs, event timelines, and run-scoped artifacts explicitly.
 
-Models produce diagnoses, recommendations, and optional structured action proposals. The application validates proposal types, parameters, investigation ownership, and evidence references before a human may approve or reject. Approval is audited state only; the project does not execute remediation or approval-gated write actions.
+Models produce diagnoses, recommendations, and optional structured action proposals. The application validates proposal types, parameters, investigation ownership, and evidence references before a human may approve or reject. Approval never invokes an action automatically. For the sole executable action, a later operator request replays the exact persisted proposal through a separate execution allowlist and deterministic executor.
+
+## 🔐 Controlled action execution
+
+```text
+AI Investigator -> Proposal -> Human Decision -> APPROVED only
+               -> Execution Authorization -> Execution Policy
+               -> Action Executor -> ToolRegistry capability
+               -> Execution Result -> Persistence + Audit Events
+```
+
+Human approval does not give the AI unrestricted tool access. `restart_simulated_service` is registered for controlled execution but excluded from investigation schemas and the MCP allowlist. The execute endpoint accepts no capability, target, or argument body: those values come from the persisted proposal. No model is called during execution.
+
+SQLite enforces one `action_executions` row per proposal. The first request records `execution_requested` and `execution_started`, invokes the bounded lab capability, then atomically persists `COMPLETED`/`FAILED` with its terminal event. Repeated requests return the existing execution and do not invoke the capability again.
 
 ## 🔌 Direct and MCP execution
 
@@ -104,6 +117,7 @@ MCP is not the product API: HTTP endpoints serve the UI and application clients,
 - A partial unique SQLite index permits one `RUNNING` run per `(incident_id, runtime mode)` while retaining historical terminal runs.
 - Database conflicts roll back before a structured HTTP `409` is returned.
 - The terminal event is flushed without committing; the corresponding run transition commits both or rolls both back.
+- Each proposal has at most one execution record; terminal execution state and terminal audit event commit together.
 - Latest APIs retain existing semantics. History APIs list runs newest-first and expose events by stable `investigation_id`.
 - Model-guided evidence and steps are linked to their `AIInvestigationRecord`; `/incidents/{incident}/investigation-runs/{investigation_id}/artifacts` resolves the exact evidence behind an older result.
 
@@ -240,6 +254,7 @@ FastAPI exposes the complete interactive contract at `/docs`.
 | Latest event timeline | `GET /incidents/{incident_id}/investigations/{runtime}/events` |
 | Run history | `GET /incidents/{incident_id}/investigation-runs?runtime=manual_responses` |
 | Event history | `GET /incidents/{incident_id}/investigation-runs/{run_id}/events` |
+| Controlled execution | `POST /incidents/{incident_id}/investigation-runs/{run_id}/action-proposals/{proposal_id}/execute` |
 
 References such as `INC-014` and numeric IDs are accepted where `{incident_id}` appears.
 
@@ -251,12 +266,12 @@ Invoke-RestMethod http://localhost:8000/incidents/INC-014/investigation-runs
 
 ## 📌 Current scope and future evolution
 
-The project is currently a single-user local application over simulation data. It demonstrates controlled read-only investigation, optional model orchestration, MCP transport comparison, durable run/event history, and local observability. It does not remediate real systems.
+The project is currently a single-user local application over simulation data. It demonstrates controlled read-only investigation, optional model orchestration, MCP transport comparison, durable run/event history, local observability, and one approval-gated lab action. It does not remediate real systems.
 
 Not yet included:
 
 - authentication, authorization, or multi-user tenancy;
-- approval workflows and write/remediation tools;
+- authentication-backed human identity and real remediation tools;
 - remote MCP, Streamable HTTP, OAuth, or persistent MCP pooling;
 - PostgreSQL or production database operations;
 - external ticketing/infrastructure integrations;
