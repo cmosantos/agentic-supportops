@@ -38,6 +38,11 @@ class InvestigationEventType(StrEnum):
     EXECUTION_STARTED = "execution_started"
     EXECUTION_COMPLETED = "execution_completed"
     EXECUTION_FAILED = "execution_failed"
+    VERIFICATION_REQUESTED = "verification_requested"
+    VERIFICATION_STARTED = "verification_started"
+    VERIFICATION_VERIFIED = "verification_verified"
+    VERIFICATION_NOT_VERIFIED = "verification_not_verified"
+    VERIFICATION_FAILED = "verification_failed"
 
 
 class AIInvestigationResult(BaseModel):

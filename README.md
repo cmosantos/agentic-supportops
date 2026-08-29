@@ -15,7 +15,7 @@ This is not a general-purpose chatbot. The unit of work is an incident. An inves
 - Canonical `InvestigationToolRegistry` for definitions, exact argument validation, execution, and normalized results.
 - Direct execution by default and an opt-in local MCP stdio transport for three allowlisted capabilities.
 - SQLAlchemy/SQLite persistence with append-oriented run/event history, concurrency protection, and atomic terminal persistence.
-- Structured action proposals, durable human decisions, and one approval-gated lab execution capability with single-execution persistence.
+- Structured action proposals, durable human decisions, one approval-gated lab execution capability, and independent post-execution outcome verification.
 - Optional application-owned OpenTelemetry spans; persisted events remain the domain source of truth.
 - Isolated backend tests and CI gates for backend, MCP, TypeScript, and production builds.
 
@@ -84,6 +84,21 @@ Human approval does not give the AI unrestricted tool access. `restart_simulated
 
 SQLite enforces one `action_executions` row per proposal. The first request records `execution_requested` and `execution_started`, invokes the bounded lab capability, then atomically persists `COMPLETED`/`FAILED` with its terminal event. Repeated requests return the existing execution and do not invoke the capability again.
 
+## 🔎 Post-execution outcome verification
+
+Execution success proves that the approved action ran successfully. It does not prove that the incident condition was corrected. After a `COMPLETED` execution, the operator may request one canonical verification. The server derives the approved target from the persisted execution and proposal; the client supplies neither target nor observer.
+
+```text
+AI Investigator -> Proposal -> Human Approval -> Execution Policy
+                -> Controlled Action -> Execution COMPLETED
+                -> Verification Policy -> Read-only Observer
+                -> Verification Evidence -> VERIFIED | NOT_VERIFIED | FAILED
+```
+
+`restart_simulated_service` maps server-side to the existing `get_application_health` observer with expected state `healthy`. This is a new read after execution, never an inference from `execution.result`. `VERIFIED` means the expected state was observed, `NOT_VERIFIED` means a reliable observation did not satisfy it, and `FAILED` means no reliable observation could be collected. No AI/model, MCP loop, shell, subprocess, external monitoring, or real service management participates.
+
+SQLite enforces one `outcome_verifications` row per execution. Requested/started events and the terminal verification state/event follow the existing transactional event pattern. Repeated requests return the canonical record without observing again. A verified outcome is human-visible evidence only: **`VERIFIED` does not automatically mean `INCIDENT RESOLVED`** and does not alter proposal, approval, execution, or incident history.
+
 ## 🔌 Direct and MCP execution
 
 `TOOL_TRANSPORT=direct` is the default for Responses API and Agents SDK investigations:
@@ -118,6 +133,7 @@ MCP is not the product API: HTTP endpoints serve the UI and application clients,
 - Database conflicts roll back before a structured HTTP `409` is returned.
 - The terminal event is flushed without committing; the corresponding run transition commits both or rolls both back.
 - Each proposal has at most one execution record; terminal execution state and terminal audit event commit together.
+- Each completed execution has at most one outcome verification; terminal verification state and event commit together.
 - Latest APIs retain existing semantics. History APIs list runs newest-first and expose events by stable `investigation_id`.
 - Model-guided evidence and steps are linked to their `AIInvestigationRecord`; `/incidents/{incident}/investigation-runs/{investigation_id}/artifacts` resolves the exact evidence behind an older result.
 
@@ -255,6 +271,8 @@ FastAPI exposes the complete interactive contract at `/docs`.
 | Run history | `GET /incidents/{incident_id}/investigation-runs?runtime=manual_responses` |
 | Event history | `GET /incidents/{incident_id}/investigation-runs/{run_id}/events` |
 | Controlled execution | `POST /incidents/{incident_id}/investigation-runs/{run_id}/action-proposals/{proposal_id}/execute` |
+| Verify completed execution | `POST /action-executions/{execution_id}/verify` |
+| Read canonical verification | `GET /action-executions/{execution_id}/verification` |
 
 References such as `INC-014` and numeric IDs are accepted where `{incident_id}` appears.
 

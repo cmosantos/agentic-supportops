@@ -9,6 +9,7 @@ from domain.investigation import InvestigationOrigin, InvestigationStepStatus
 from domain.ai import AIInvestigationStatus, InvestigationEventType, InvestigationRuntime
 from domain.action_proposal import ActionRisk, ActionType, ApprovalStatus
 from domain.action_execution import ActionExecutionStatus
+from domain.outcome_verification import OutcomeVerificationStatus
 
 
 class IncidentRecord(Base):
@@ -199,4 +200,32 @@ class ActionExecutionRecord(Base):
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     result: Mapped[dict | None] = mapped_column(JSON)
+    error: Mapped[dict | None] = mapped_column(JSON)
+
+
+class OutcomeVerificationRecord(Base):
+    __tablename__ = "outcome_verifications"
+    __table_args__ = (UniqueConstraint("execution_id"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    execution_id: Mapped[int] = mapped_column(
+        ForeignKey("action_executions.id"), nullable=False
+    )
+    proposal_id: Mapped[int] = mapped_column(
+        ForeignKey("action_proposals.id"), nullable=False, index=True
+    )
+    incident_id: Mapped[int] = mapped_column(
+        ForeignKey("incidents.id"), nullable=False, index=True
+    )
+    status: Mapped[OutcomeVerificationStatus] = mapped_column(
+        Enum(OutcomeVerificationStatus, native_enum=False), nullable=False, index=True
+    )
+    requested_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    expected_outcome: Mapped[dict] = mapped_column(JSON)
+    observed_outcome: Mapped[dict | None] = mapped_column(JSON)
+    evidence: Mapped[dict | None] = mapped_column(JSON)
     error: Mapped[dict | None] = mapped_column(JSON)

@@ -10,9 +10,11 @@ from core.config import settings
 from integrations.responses_gateway import ResponsesGateway
 from integrations.mcp_client import build_investigation_tools
 from observability.tracing import TraceBoundary, build_trace_boundary
+from services.tool_registry import InvestigationToolRegistry
 
 
 trace_boundary = build_trace_boundary(settings)
+controlled_tools = InvestigationToolRegistry()
 
 
 def get_db_session() -> Generator[Session, None, None]:
@@ -53,3 +55,8 @@ def get_agents_sdk_model() -> Model | None:
 
 def get_trace_boundary() -> TraceBoundary:
     return trace_boundary
+
+
+def get_controlled_tools() -> InvestigationToolRegistry:
+    """Shared deterministic lab state for controlled execution and verification."""
+    return controlled_tools

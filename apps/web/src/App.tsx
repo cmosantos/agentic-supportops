@@ -82,6 +82,20 @@ type ActionExecution = {
   result: { data?: Record<string, unknown> } | null;
   error: { code: string; message: string } | null;
 };
+type OutcomeVerification = {
+  id: number;
+  execution_id: number;
+  proposal_id: number;
+  incident_id: number;
+  status: "running" | "verified" | "not_verified" | "failed";
+  requested_at: string;
+  started_at: string;
+  completed_at: string | null;
+  expected_outcome: { state?: string };
+  observed_outcome: { state?: string } | null;
+  evidence: Record<string, unknown> | null;
+  error: { code: string; message: string } | null;
+};
 type Investigation = {
   incident_id: number;
   catalog_id: string | null;
@@ -159,6 +173,8 @@ export function App() {
   const [decidingProposal, setDecidingProposal] = useState(false);
   const [actionExecution, setActionExecution] = useState<ActionExecution | null>(null);
   const [executingAction, setExecutingAction] = useState(false);
+  const [outcomeVerification, setOutcomeVerification] = useState<OutcomeVerification | null>(null);
+  const [verifyingOutcome, setVerifyingOutcome] = useState(false);
   const investigationRequest = useRef<AbortController | null>(null);
   const investigationVersion = useRef(0);
 
@@ -220,6 +236,8 @@ export function App() {
     setProposalError(null);
     setActionExecution(null);
     setExecutingAction(false);
+    setOutcomeVerification(null);
+    setVerifyingOutcome(false);
     setMode(null);
     setInvestigationError(null);
     setInvestigating(false);
@@ -241,6 +259,8 @@ export function App() {
     setProposalError(null);
     setActionExecution(null);
     setExecutingAction(false);
+    setOutcomeVerification(null);
+    setVerifyingOutcome(false);
     setMode(investigationMode);
 
     try {
@@ -334,11 +354,47 @@ export function App() {
         { method: "POST" },
       );
       if (!response.ok) throw new Error(await investigationErrorMessage(response));
-      setActionExecution(await response.json());
+      const execution: ActionExecution = await response.json();
+      setActionExecution(execution);
+      if (execution.status === "completed") {
+        try {
+          const verificationResponse = await fetch(
+            `${apiBaseUrl}/action-executions/${execution.id}/verification`,
+          );
+          if (verificationResponse.ok) {
+            setOutcomeVerification(await verificationResponse.json());
+          }
+        } catch {
+          // Absence of prior verification leaves the explicit action available.
+        }
+      }
     } catch (error: unknown) {
       setProposalError(error instanceof Error ? error.message : "Action execution failed");
     } finally {
       setExecutingAction(false);
+    }
+  }
+
+  async function verifyOutcome() {
+    if (
+      !actionExecution ||
+      actionExecution.status !== "completed" ||
+      verifyingOutcome ||
+      outcomeVerification
+    ) return;
+    setVerifyingOutcome(true);
+    setProposalError(null);
+    try {
+      const response = await fetch(
+        `${apiBaseUrl}/action-executions/${actionExecution.id}/verify`,
+        { method: "POST" },
+      );
+      if (!response.ok) throw new Error(await investigationErrorMessage(response));
+      setOutcomeVerification(await response.json());
+    } catch (error: unknown) {
+      setProposalError(error instanceof Error ? error.message : "Outcome verification failed");
+    } finally {
+      setVerifyingOutcome(false);
     }
   }
 
@@ -482,6 +538,26 @@ export function App() {
                         )}
                         {actionExecution.error && (
                           <p className="error">{actionExecution.error.message}</p>
+                        )}
+                      </section>
+                    )}
+                    {actionExecution?.status === "completed" && !outcomeVerification && (
+                      <div className="actions" aria-busy={verifyingOutcome}>
+                        <button disabled={verifyingOutcome} onClick={verifyOutcome}>
+                          {verifyingOutcome ? "Checking observed service state…" : "Verify outcome"}
+                        </button>
+                      </div>
+                    )}
+                    {outcomeVerification && (
+                      <section className="result-section" aria-label="Outcome verification">
+                        <h4>Verification</h4>
+                        <p><b>Verification status:</b> {displayStatus(outcomeVerification.status).toUpperCase()}</p>
+                        <p><b>Expected:</b> {outcomeVerification.expected_outcome.state?.toUpperCase() ?? "UNKNOWN"}</p>
+                        {outcomeVerification.observed_outcome?.state && (
+                          <p><b>Observed:</b> {outcomeVerification.observed_outcome.state.toUpperCase()}</p>
+                        )}
+                        {outcomeVerification.error && (
+                          <p className="error">{outcomeVerification.error.message}</p>
                         )}
                       </section>
                     )}

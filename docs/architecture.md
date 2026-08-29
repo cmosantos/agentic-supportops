@@ -147,6 +147,41 @@ The capability operates entirely over the local Contoso application abstraction.
 
 `action_executions.proposal_id` is unique. Creation in `RUNNING` state and the requested/started events commit together. Capability success or failure is recorded as `COMPLETED` or `FAILED`, and the matching terminal event commits in the same transaction. A repeated or concurrent request observes the existing row and cannot invoke the capability twice. Execution failure does not rewrite the historically separate `APPROVED` decision.
 
+## Post-execution verification boundary
+
+Successful execution is not proof of successful remediation. `ActionExecution(COMPLETED)` and `OutcomeVerification(VERIFIED)` are separate historical facts.
+
+```mermaid
+flowchart TD
+    AI[AI Investigator] --> Proposal
+    Proposal --> Approval[Human Approval]
+    Approval --> ExecutionPolicy
+    ExecutionPolicy --> Action[Controlled Action]
+    Action --> Completed[Execution COMPLETED]
+    Completed --> VerificationPolicy
+    VerificationPolicy --> Observer[Read-only Observer]
+    Observer --> Evidence[Verification Evidence]
+    Evidence --> Verified[VERIFIED]
+    Evidence --> NotVerified[NOT_VERIFIED]
+    Evidence --> Failed[FAILED]
+```
+
+`POST /action-executions/{execution_id}/verify` accepts no verification command. The service loads the execution, its proposal, and the approved target from SQLite. `VerificationPolicy` maps the persisted `restart_simulated_service` capability to the canonical `get_application_health` read-only capability and expected `healthy` state. Neither client nor model selects the target, observer, or arguments.
+
+The observer performs a new read of the simulated application state; it never trusts `execution.result.current_state`. A successful matching observation produces `VERIFIED`; a successful non-matching observation produces `NOT_VERIFIED`; an unavailable or failed observer produces `FAILED` with a bounded safe error. No Responses API, Agents SDK, model, MCP agent loop, shell, subprocess, or external system is called.
+
+`outcome_verifications.execution_id` is unique. The initial record and requested/started events are committed together. Terminal state and its matching `verification_verified`, `verification_not_verified`, or `verification_failed` event share another transaction. Concurrent/repeated requests return the canonical record and never repeat observation.
+
+Verification does not rewrite the proposal, human decision, execution, or incident. In particular, **`VERIFIED` does not automatically mean `INCIDENT RESOLVED`**; incident resolution remains a future human-governed boundary.
+
+The three policies retain distinct trust contexts over one capability catalog:
+
+| Policy | Authority |
+| --- | --- |
+| Investigation policy | Read-only capabilities an AI runtime may inspect. |
+| Execution policy | Mutable capability an approved proposal may invoke once. |
+| Verification policy | Deterministic read-only observer used to evaluate a completed execution. |
+
 ## Persistence and transactions
 
 Run records are append-oriented history. Latest lookups order by descending run ID; history lists all runs newest-first. Historical events are explicitly run-scoped.
@@ -156,6 +191,7 @@ SQLite enforces:
 ```text
 UNIQUE (incident_id, mode) WHERE status = 'RUNNING'
 UNIQUE (action_executions.proposal_id)
+UNIQUE (outcome_verifications.execution_id)
 ```
 
 This permits one manual Responses run and one Agents SDK run for the same incident, while rejecting concurrency within one mode. `IntegrityError` handling rolls back the session before returning a controlled conflict.

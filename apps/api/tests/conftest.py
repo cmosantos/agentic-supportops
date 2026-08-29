@@ -5,10 +5,12 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
-from api.dependencies import get_db_session
+from api.dependencies import get_controlled_tools, get_db_session
 from db.base import Base
 from main import app
 from simulation.seed import seed_catalog
+from services.tool_registry import InvestigationToolRegistry
+from simulation.repository import SimulationRepository
 
 
 @pytest.fixture
@@ -29,6 +31,10 @@ def client(tmp_path, monkeypatch: pytest.MonkeyPatch) -> Generator[TestClient, N
             session.close()
 
     app.dependency_overrides[get_db_session] = override_session
+    controlled_repository = SimulationRepository()
+    app.dependency_overrides[get_controlled_tools] = lambda: InvestigationToolRegistry(
+        controlled_repository
+    )
     with TestClient(app) as test_client:
         yield test_client
     app.dependency_overrides.clear()
@@ -56,6 +62,10 @@ def seeded_client(tmp_path, monkeypatch: pytest.MonkeyPatch) -> Generator[TestCl
             session.close()
 
     app.dependency_overrides[get_db_session] = override_session
+    controlled_repository = SimulationRepository()
+    app.dependency_overrides[get_controlled_tools] = lambda: InvestigationToolRegistry(
+        controlled_repository
+    )
     with TestClient(app) as test_client:
         yield test_client
     app.dependency_overrides.clear()

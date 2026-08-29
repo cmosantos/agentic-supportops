@@ -12,7 +12,7 @@ class ActionTools:
     def restart_simulated_service(
         self, target: str, service_name: str
     ) -> ToolResult:
-        application = self._repository.get_application(target)
+        application = self._repository.get_application_for_action(target)
         if application is None:
             return failure(
                 "restart_simulated_service",
@@ -36,6 +36,7 @@ class ActionTools:
                 ToolErrorCode.SERVICE_NOT_FOUND,
                 "Simulated application service not found",
             )
+        current_state = self._repository.restart_application(application.id)
         return success(
             "restart_simulated_service",
             application.id,
@@ -43,7 +44,7 @@ class ActionTools:
                 "target": application.id,
                 "service_name": service.name,
                 "previous_state": application.status,
-                "current_state": "healthy",
+                "current_state": current_state,
                 "restarted": True,
             },
         )

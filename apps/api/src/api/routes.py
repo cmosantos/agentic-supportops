@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from agents import Model
 
-from api.dependencies import get_agents_sdk_model, get_db_session, get_responses_gateway, get_trace_boundary
+from api.dependencies import get_agents_sdk_model, get_controlled_tools, get_db_session, get_responses_gateway, get_trace_boundary
 from core.config import settings
 from domain.ai import AIInvestigationExecution, AIInvestigationRead, InvestigationEventRead, InvestigationRuntime
 from db.models import IncidentRecord
@@ -21,6 +21,7 @@ from domain.action_proposal import (
     ActionRejection,
 )
 from domain.action_execution import ActionExecutionRead
+from domain.outcome_verification import OutcomeVerificationRead
 from repositories.incident_repository import IncidentRepository
 from repositories.investigation_repository import ActiveInvestigationExistsError, InvestigationRepository
 from repositories.action_proposal_repository import (
@@ -28,6 +29,7 @@ from repositories.action_proposal_repository import (
     InvalidApprovalTransitionError,
 )
 from repositories.action_execution_repository import ActionExecutionRepository
+from repositories.outcome_verification_repository import OutcomeVerificationRepository
 from services.incident_service import IncidentService
 from integrations.responses_gateway import ResponsesGateway
 from integrations.mcp_client import build_investigation_tools
@@ -47,6 +49,13 @@ from services.action_execution_service import (
     ActionExecutionService,
 )
 from services.execution_policy import ExecutionPolicy, ExecutionPolicyDeniedError
+from services.outcome_verification_service import (
+    ActionExecutionNotCompletedError,
+    ActionExecutionNotFoundError as VerificationExecutionNotFoundError,
+    OutcomeVerificationNotFoundError,
+    OutcomeVerificationService,
+)
+from services.verification_policy import VerificationPolicy, VerificationPolicyDeniedError
 from services.tool_registry import InvestigationToolRegistry
 from services.investigation_service import (
     InvalidInvestigationContextError,
@@ -60,6 +69,7 @@ DatabaseSession = Annotated[Session, Depends(get_db_session)]
 ResponsesClientDependency = Annotated[ResponsesGateway | None, Depends(get_responses_gateway)]
 AgentsSDKModelDependency = Annotated[Model | None, Depends(get_agents_sdk_model)]
 TraceBoundaryDependency = Annotated[TraceBoundary, Depends(get_trace_boundary)]
+ControlledToolsDependency = Annotated[InvestigationToolRegistry, Depends(get_controlled_tools)]
 
 
 @router.get("/health")
@@ -454,6 +464,7 @@ def execute_action_proposal(
     investigation_id: int,
     proposal_id: int,
     session: DatabaseSession,
+    tools: ControlledToolsDependency,
 ) -> ActionExecutionRead:
     investigation = _investigation_or_404(incident_id, investigation_id, session)
     runtime = (
@@ -464,7 +475,7 @@ def execute_action_proposal(
     service = ActionExecutionService(
         ActionExecutionRepository(session),
         ExecutionPolicy(),
-        InvestigationToolRegistry(),
+        tools,
     )
     try:
         return service.execute(
@@ -481,6 +492,54 @@ def execute_action_proposal(
     except ExecutionPolicyDeniedError as error:
         raise _proposal_error(
             status.HTTP_403_FORBIDDEN, "execution_policy_denied", error
+        )
+
+
+@router.post(
+    "/action-executions/{execution_id}/verify",
+    response_model=OutcomeVerificationRead,
+)
+def verify_action_execution(
+    execution_id: int,
+    session: DatabaseSession,
+    tools: ControlledToolsDependency,
+) -> OutcomeVerificationRead:
+    service = OutcomeVerificationService(
+        OutcomeVerificationRepository(session), VerificationPolicy(), tools
+    )
+    try:
+        return service.verify(execution_id)
+    except VerificationExecutionNotFoundError as error:
+        raise _proposal_error(
+            status.HTTP_404_NOT_FOUND, "action_execution_not_found", error
+        )
+    except ActionExecutionNotCompletedError as error:
+        raise _proposal_error(
+            status.HTTP_409_CONFLICT, "execution_not_completed", error
+        )
+    except VerificationPolicyDeniedError as error:
+        raise _proposal_error(
+            status.HTTP_403_FORBIDDEN, "verification_policy_denied", error
+        )
+
+
+@router.get(
+    "/action-executions/{execution_id}/verification",
+    response_model=OutcomeVerificationRead,
+)
+def get_action_execution_verification(
+    execution_id: int,
+    session: DatabaseSession,
+    tools: ControlledToolsDependency,
+) -> OutcomeVerificationRead:
+    service = OutcomeVerificationService(
+        OutcomeVerificationRepository(session), VerificationPolicy(), tools
+    )
+    try:
+        return service.get(execution_id)
+    except OutcomeVerificationNotFoundError as error:
+        raise _proposal_error(
+            status.HTTP_404_NOT_FOUND, "outcome_verification_not_found", error
         )
 
 
