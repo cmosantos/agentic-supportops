@@ -1,5 +1,6 @@
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
+from inspect import signature
 from threading import Barrier
 
 import pytest
@@ -35,6 +36,10 @@ from repositories.action_execution_repository import (
 )
 from repositories.investigation_repository import InvestigationRepository
 from services.tool_registry import InvestigationToolRegistry
+from services.action_execution_recovery_service import (
+    ActionExecutionRecoveryError,
+    ActionExecutionRecoveryService,
+)
 from tools.actions import ActionTools
 
 
@@ -144,6 +149,28 @@ def classify(sessions, execution_id: int, attempt_id: int):
         return ActionExecutionRepository(session).classify_stale_interruption(
             execution_id, attempt_id, CUTOFF, NOW
         )
+
+
+def assess(
+    sessions,
+    execution_id: int,
+    attempt_id: int,
+    *,
+    now: datetime = NOW,
+    stale_after_seconds: int = 300,
+):
+    with sessions() as session:
+        return ActionExecutionRecoveryService(
+            ActionExecutionRepository(session),
+            stale_after_seconds,
+            current_time=lambda: now,
+        ).assess_stale_attempt(execution_id, attempt_id)
+
+
+def assert_recovery_error(code: str, operation) -> None:
+    with pytest.raises(ActionExecutionRecoveryError) as captured:
+        operation()
+    assert captured.value.code == code
 
 
 def persisted_state(sessions, execution_id: int, attempt_id: int):
@@ -483,3 +510,312 @@ def test_repository_classification_has_no_tool_or_model_side_effects(
     result = classify(recovery_sessions, execution_id, attempt_id)
 
     assert result.status == StaleExecutionPersistenceStatus.TRANSITIONED
+
+
+@pytest.mark.parametrize(
+    ("invocation_started_at", "execution_status", "attempt_status", "certainty"),
+    [
+        (
+            None,
+            ActionExecutionStatus.FAILED,
+            ActionExecutionAttemptStatus.FAILED,
+            OutcomeCertainty.NOT_APPLIED,
+        ),
+        (
+            OLD,
+            ActionExecutionStatus.OUTCOME_UNKNOWN,
+            ActionExecutionAttemptStatus.OUTCOME_UNKNOWN,
+            OutcomeCertainty.UNKNOWN,
+        ),
+    ],
+)
+def test_recovery_service_returns_canonical_stale_assessment(
+    recovery_sessions,
+    invocation_started_at,
+    execution_status,
+    attempt_status,
+    certainty,
+) -> None:
+    execution_id, attempt_id, _ = seed_recovery_context(
+        recovery_sessions, invocation_started_at=invocation_started_at
+    )
+
+    result = assess(recovery_sessions, execution_id, attempt_id)
+
+    assert result.execution.id == execution_id
+    assert result.execution.status == execution_status
+    assert result.attempt.id == attempt_id
+    assert result.attempt.status == attempt_status
+    assert result.attempt.failure_cause == FailureCause.PROCESS_INTERRUPTED
+    assert result.attempt.outcome_certainty == certainty
+
+
+@pytest.mark.parametrize(
+    ("claimed_at", "invocation_started_at"),
+    [(RECENT, None), (OLD, RECENT)],
+)
+def test_recovery_service_rejects_recent_durable_progress(
+    recovery_sessions, claimed_at, invocation_started_at
+) -> None:
+    execution_id, attempt_id, _ = seed_recovery_context(
+        recovery_sessions,
+        claimed_at=claimed_at,
+        invocation_started_at=invocation_started_at,
+    )
+
+    assert_recovery_error(
+        "execution_attempt_not_stale",
+        lambda: assess(recovery_sessions, execution_id, attempt_id),
+    )
+    execution, attempt, events, _ = persisted_state(
+        recovery_sessions, execution_id, attempt_id
+    )
+    assert execution.status == ActionExecutionStatus.RUNNING
+    assert attempt.status == ActionExecutionAttemptStatus.RUNNING
+    assert events == []
+
+
+def test_recovery_service_duplicate_call_preserves_timestamp_and_single_event(
+    recovery_sessions,
+) -> None:
+    execution_id, attempt_id, _ = seed_recovery_context(recovery_sessions)
+
+    first = assess(recovery_sessions, execution_id, attempt_id)
+    second = assess(recovery_sessions, execution_id, attempt_id)
+    _, _, events, attempts = persisted_state(
+        recovery_sessions, execution_id, attempt_id
+    )
+
+    assert first == second
+    assert first.execution.completed_at == second.execution.completed_at
+    assert first.attempt.completed_at == second.attempt.completed_at
+    assert len(events) == 1
+    assert len(attempts) == 1
+
+
+def test_recovery_service_reports_missing_execution(recovery_sessions) -> None:
+    assert_recovery_error(
+        "action_execution_not_found",
+        lambda: assess(recovery_sessions, 999, 999),
+    )
+
+
+def test_recovery_service_reports_missing_attempt(recovery_sessions) -> None:
+    execution_id, _, _ = seed_recovery_context(recovery_sessions)
+    assert_recovery_error(
+        "execution_attempt_not_found",
+        lambda: assess(recovery_sessions, execution_id, 999),
+    )
+
+
+def test_recovery_service_reports_attempt_mismatch(recovery_sessions) -> None:
+    execution_id, _, _ = seed_recovery_context(recovery_sessions)
+    _, other_attempt_id, _ = seed_recovery_context(recovery_sessions)
+    assert_recovery_error(
+        "execution_attempt_mismatch",
+        lambda: assess(recovery_sessions, execution_id, other_attempt_id),
+    )
+
+
+def test_recovery_service_reports_noncanonical_attempt(recovery_sessions) -> None:
+    execution_id, attempt_id, _ = seed_recovery_context(recovery_sessions)
+    with recovery_sessions() as session:
+        session.add(
+            ActionExecutionAttemptRecord(
+                execution_id=execution_id,
+                attempt_number=2,
+                status=ActionExecutionAttemptStatus.FAILED,
+                claimed_at=OLD,
+                completed_at=OLD,
+                error={"code": "legacy_test"},
+                failure_cause=FailureCause.LEGACY_UNCLASSIFIED,
+                outcome_certainty=OutcomeCertainty.LEGACY_UNDETERMINED,
+            )
+        )
+        session.commit()
+
+    assert_recovery_error(
+        "execution_attempt_not_canonical",
+        lambda: assess(recovery_sessions, execution_id, attempt_id),
+    )
+
+
+@pytest.mark.parametrize(
+    ("execution_status", "attempt_status", "failure_cause", "certainty", "result"),
+    [
+        (
+            ActionExecutionStatus.COMPLETED,
+            ActionExecutionAttemptStatus.COMPLETED,
+            None,
+            OutcomeCertainty.APPLIED_ACKNOWLEDGED,
+            {"success": True},
+        ),
+        (
+            ActionExecutionStatus.FAILED,
+            ActionExecutionAttemptStatus.FAILED,
+            FailureCause.TOOL_REJECTED,
+            OutcomeCertainty.NOT_APPLIED,
+            None,
+        ),
+        (
+            ActionExecutionStatus.OUTCOME_UNKNOWN,
+            ActionExecutionAttemptStatus.OUTCOME_UNKNOWN,
+            FailureCause.TOOL_EXCEPTION,
+            OutcomeCertainty.UNKNOWN,
+            None,
+        ),
+    ],
+)
+def test_recovery_service_preserves_other_terminal_classifications(
+    recovery_sessions,
+    execution_status,
+    attempt_status,
+    failure_cause,
+    certainty,
+    result,
+) -> None:
+    execution_id, attempt_id, _ = seed_recovery_context(
+        recovery_sessions,
+        invocation_started_at=OLD,
+        execution_status=execution_status,
+        attempt_status=attempt_status,
+        failure_cause=failure_cause,
+        outcome_certainty=certainty,
+        result=result,
+    )
+
+    assert_recovery_error(
+        "execution_attempt_already_terminal",
+        lambda: assess(recovery_sessions, execution_id, attempt_id),
+    )
+    execution, attempt, events, _ = persisted_state(
+        recovery_sessions, execution_id, attempt_id
+    )
+    assert execution.status == execution_status
+    assert execution.result == result
+    assert attempt.failure_cause == failure_cause
+    assert attempt.outcome_certainty == certainty
+    assert events == []
+
+
+def test_recovery_service_reports_inconsistent_state(recovery_sessions) -> None:
+    execution_id, attempt_id, _ = seed_recovery_context(
+        recovery_sessions,
+        execution_status=ActionExecutionStatus.COMPLETED,
+        attempt_status=ActionExecutionAttemptStatus.RUNNING,
+        result={"success": True},
+    )
+
+    assert_recovery_error(
+        "execution_recovery_conflict",
+        lambda: assess(recovery_sessions, execution_id, attempt_id),
+    )
+
+
+def test_recovery_service_concurrent_calls_return_equivalent_success(
+    recovery_sessions, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    execution_id, attempt_id, _ = seed_recovery_context(recovery_sessions)
+    barrier = Barrier(2)
+    original = ActionExecutionAttemptRepository.classify_stale_before_invocation
+
+    def synchronized_transition(self, *args, **kwargs):
+        barrier.wait(timeout=5)
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(
+        ActionExecutionAttemptRepository,
+        "classify_stale_before_invocation",
+        synchronized_transition,
+    )
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(
+            executor.map(
+                lambda _: assess(recovery_sessions, execution_id, attempt_id),
+                range(2),
+            )
+        )
+
+    assert results[0] == results[1]
+    _, _, events, _ = persisted_state(recovery_sessions, execution_id, attempt_id)
+    assert len(events) == 1
+
+
+def test_recovery_service_translates_terminal_race_without_rewrite(
+    recovery_sessions, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    execution_id, attempt_id, _ = seed_recovery_context(recovery_sessions)
+
+    def terminal_wins(repository, execution_id, attempt_id, cutoff, assessed_at):
+        with recovery_sessions() as winner:
+            execution = winner.get(ActionExecutionRecord, execution_id)
+            attempt = winner.get(ActionExecutionAttemptRecord, attempt_id)
+            execution.status = ActionExecutionStatus.COMPLETED
+            execution.completed_at = NOW
+            execution.result = {"success": True}
+            execution.completion_basis = ActionExecutionCompletionBasis.ACKNOWLEDGED_RESULT
+            attempt.status = ActionExecutionAttemptStatus.COMPLETED
+            attempt.completed_at = NOW
+            attempt.result = {"success": True}
+            attempt.outcome_certainty = OutcomeCertainty.APPLIED_ACKNOWLEDGED
+            winner.commit()
+        return repository._reload_after_stale_conflict(execution_id, attempt_id, cutoff)
+
+    monkeypatch.setattr(
+        ActionExecutionRepository,
+        "classify_stale_interruption",
+        terminal_wins,
+    )
+    assert_recovery_error(
+        "execution_attempt_already_terminal",
+        lambda: assess(recovery_sessions, execution_id, attempt_id),
+    )
+    execution, attempt, events, _ = persisted_state(
+        recovery_sessions, execution_id, attempt_id
+    )
+    assert execution.status == ActionExecutionStatus.COMPLETED
+    assert attempt.status == ActionExecutionAttemptStatus.COMPLETED
+    assert events == []
+
+
+def test_recovery_service_has_no_operational_dependencies(
+    recovery_sessions, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    execution_id, attempt_id, _ = seed_recovery_context(recovery_sessions)
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("operational dependency must not be resolved")
+
+    monkeypatch.setattr(ActionTools, "restart_simulated_service", forbidden)
+    monkeypatch.setattr(InvestigationToolRegistry, "execute", forbidden)
+    monkeypatch.setattr(ResponsesGateway, "create_initial", forbidden)
+
+    parameters = signature(ActionExecutionRecoveryService).parameters
+    assert set(parameters) == {"repository", "stale_after_seconds", "current_time"}
+    assert assess(recovery_sessions, execution_id, attempt_id).execution.status == (
+        ActionExecutionStatus.FAILED
+    )
+
+
+def test_recovery_service_honors_custom_threshold(recovery_sessions) -> None:
+    claimed_at = NOW - timedelta(seconds=120)
+    execution_id, attempt_id, _ = seed_recovery_context(
+        recovery_sessions, claimed_at=claimed_at
+    )
+
+    assert_recovery_error(
+        "execution_attempt_not_stale",
+        lambda: assess(
+            recovery_sessions,
+            execution_id,
+            attempt_id,
+            stale_after_seconds=180,
+        ),
+    )
+    result = assess(
+        recovery_sessions,
+        execution_id,
+        attempt_id,
+        stale_after_seconds=60,
+    )
+    assert result.execution.status == ActionExecutionStatus.FAILED
