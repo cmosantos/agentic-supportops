@@ -1,6 +1,7 @@
 from datetime import datetime
 
-from sqlalchemy import select, update
+from sqlalchemy import exists, select, update
+from sqlalchemy.orm import aliased
 from sqlalchemy.orm import Session
 
 from db.models import ActionExecutionAttemptRecord
@@ -113,6 +114,107 @@ class ActionExecutionAttemptRepository:
             failure_cause=failure_cause,
             outcome_certainty=OutcomeCertainty.UNKNOWN,
         )
+
+    def classify_stale_before_invocation(
+        self,
+        record: ActionExecutionAttemptRecord,
+        cutoff: datetime,
+        assessed_at: datetime,
+        error: dict,
+    ) -> bool:
+        return self._classify_stale(
+            record,
+            cutoff=cutoff,
+            assessed_at=assessed_at,
+            invocation_started=False,
+            status=ActionExecutionAttemptStatus.FAILED,
+            error=error,
+            outcome_certainty=OutcomeCertainty.NOT_APPLIED,
+        )
+
+    def classify_stale_after_invocation(
+        self,
+        record: ActionExecutionAttemptRecord,
+        cutoff: datetime,
+        assessed_at: datetime,
+        error: dict,
+    ) -> bool:
+        return self._classify_stale(
+            record,
+            cutoff=cutoff,
+            assessed_at=assessed_at,
+            invocation_started=True,
+            status=ActionExecutionAttemptStatus.OUTCOME_UNKNOWN,
+            error=error,
+            outcome_certainty=OutcomeCertainty.UNKNOWN,
+        )
+
+    def has_later_attempt(self, record: ActionExecutionAttemptRecord) -> bool:
+        return bool(
+            self._session.scalar(
+                select(
+                    exists().where(
+                        ActionExecutionAttemptRecord.execution_id
+                        == record.execution_id,
+                        ActionExecutionAttemptRecord.attempt_number
+                        > record.attempt_number,
+                    )
+                )
+            )
+        )
+
+    def _classify_stale(
+        self,
+        record: ActionExecutionAttemptRecord,
+        *,
+        cutoff: datetime,
+        assessed_at: datetime,
+        invocation_started: bool,
+        status: ActionExecutionAttemptStatus,
+        error: dict,
+        outcome_certainty: OutcomeCertainty,
+    ) -> bool:
+        later_attempt = aliased(ActionExecutionAttemptRecord)
+        no_later_attempt = ~exists().where(
+            later_attempt.execution_id == record.execution_id,
+            later_attempt.attempt_number > record.attempt_number,
+        )
+        predicates = [
+            ActionExecutionAttemptRecord.id == record.id,
+            ActionExecutionAttemptRecord.execution_id == record.execution_id,
+            ActionExecutionAttemptRecord.attempt_number == 1,
+            ActionExecutionAttemptRecord.status
+            == ActionExecutionAttemptStatus.RUNNING,
+            no_later_attempt,
+        ]
+        if invocation_started:
+            predicates.extend(
+                (
+                    ActionExecutionAttemptRecord.invocation_started_at.is_not(None),
+                    ActionExecutionAttemptRecord.invocation_started_at <= cutoff,
+                )
+            )
+        else:
+            predicates.extend(
+                (
+                    ActionExecutionAttemptRecord.invocation_started_at.is_(None),
+                    ActionExecutionAttemptRecord.claimed_at <= cutoff,
+                )
+            )
+        outcome = self._session.execute(
+            update(ActionExecutionAttemptRecord)
+            .where(*predicates)
+            .values(
+                status=status,
+                completed_at=assessed_at,
+                result=None,
+                error=error,
+                failure_cause=FailureCause.PROCESS_INTERRUPTED,
+                outcome_certainty=outcome_certainty,
+            )
+            .execution_options(synchronize_session="fetch")
+        )
+        return outcome.rowcount == 1
 
     def _terminalize(
         self,
