@@ -20,7 +20,10 @@ from domain.action_proposal import (
     ActionProposalRead,
     ActionRejection,
 )
-from domain.action_execution import ActionExecutionRead
+from domain.action_execution import (
+    ActionExecutionRead,
+    ActionExecutionStaleAssessmentRead,
+)
 from domain.outcome_verification import OutcomeVerificationRead
 from domain.incident_resolution import IncidentResolutionCreate, IncidentResolutionRead
 from repositories.incident_repository import IncidentRepository
@@ -49,6 +52,10 @@ from services.action_execution_service import (
     ActionExecutionNotApprovedError,
     ActionExecutionNotFoundError,
     ActionExecutionService,
+)
+from services.action_execution_recovery_service import (
+    ActionExecutionRecoveryError,
+    ActionExecutionRecoveryService,
 )
 from services.execution_policy import ExecutionPolicy, ExecutionPolicyDeniedError
 from services.outcome_verification_service import (
@@ -503,6 +510,38 @@ def execute_action_proposal(
         raise _proposal_error(
             status.HTTP_403_FORBIDDEN, "execution_policy_denied", error
         )
+
+
+@router.post(
+    "/action-executions/{execution_id}/attempts/{attempt_id}/stale-assessment",
+    response_model=ActionExecutionStaleAssessmentRead,
+)
+def assess_stale_action_execution_attempt(
+    execution_id: int,
+    attempt_id: int,
+    session: DatabaseSession,
+) -> ActionExecutionStaleAssessmentRead:
+    service = ActionExecutionRecoveryService(
+        ActionExecutionRepository(session),
+        settings.action_execution_attempt_stale_after_seconds,
+    )
+    try:
+        return service.assess_stale_attempt(execution_id, attempt_id)
+    except ActionExecutionRecoveryError as error:
+        if error.code in {
+            "action_execution_not_found",
+            "execution_attempt_not_found",
+        }:
+            raise _proposal_error(status.HTTP_404_NOT_FOUND, error.code, error)
+        if error.code in {
+            "execution_attempt_not_stale",
+            "execution_attempt_mismatch",
+            "execution_attempt_not_canonical",
+            "execution_attempt_already_terminal",
+            "execution_recovery_conflict",
+        }:
+            raise _proposal_error(status.HTTP_409_CONFLICT, error.code, error)
+        raise
 
 
 @router.post(
