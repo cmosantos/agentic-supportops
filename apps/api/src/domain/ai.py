@@ -39,6 +39,9 @@ class InvestigationEventType(StrEnum):
     EXECUTION_COMPLETED = "execution_completed"
     EXECUTION_FAILED = "execution_failed"
     EXECUTION_ATTEMPT_OUTCOME_UNKNOWN = "execution_attempt_outcome_unknown"
+    EXECUTION_ATTEMPT_INTERRUPTION_ASSESSED = (
+        "execution_attempt_interruption_assessed"
+    )
     VERIFICATION_REQUESTED = "verification_requested"
     VERIFICATION_STARTED = "verification_started"
     VERIFICATION_VERIFIED = "verification_verified"

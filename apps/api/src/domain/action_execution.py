@@ -73,3 +73,8 @@ class ActionExecutionAttemptRead(BaseModel):
     failure_cause: FailureCause | None
     outcome_certainty: OutcomeCertainty | None
     created_at: datetime
+
+
+class ActionExecutionStaleAssessmentRead(BaseModel):
+    execution: ActionExecutionRead
+    attempt: ActionExecutionAttemptRead

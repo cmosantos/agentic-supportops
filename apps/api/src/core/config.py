@@ -53,6 +53,11 @@ class Settings:
     mcp_timeout_seconds: float = field(
         default_factory=lambda: float(os.getenv("MCP_TIMEOUT_SECONDS", "10"))
     )
+    action_execution_attempt_stale_after_seconds: int = field(
+        default_factory=lambda: int(
+            os.getenv("ACTION_EXECUTION_ATTEMPT_STALE_AFTER_SECONDS", "300")
+        )
+    )
     otel_enabled: bool = field(
         default_factory=lambda: os.getenv("OTEL_ENABLED", "false").lower()
         in {"1", "true", "yes", "on"}
@@ -71,6 +76,10 @@ class Settings:
             raise ValueError("TOOL_TRANSPORT must be 'direct' or 'mcp'")
         if self.mcp_timeout_seconds <= 0:
             raise ValueError("MCP_TIMEOUT_SECONDS must be greater than zero")
+        if self.action_execution_attempt_stale_after_seconds <= 0:
+            raise ValueError(
+                "ACTION_EXECUTION_ATTEMPT_STALE_AFTER_SECONDS must be greater than zero"
+            )
 
 
 settings = Settings()

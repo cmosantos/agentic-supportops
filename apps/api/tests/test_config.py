@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from core.config import Settings, load_local_environment
 
 
@@ -78,3 +80,36 @@ def test_tool_transport_defaults_direct_and_supports_bounded_mcp(monkeypatch) ->
     configured = Settings()
     assert configured.tool_transport == "mcp"
     assert configured.mcp_timeout_seconds == 4.5
+
+
+def test_stale_execution_assessment_threshold_defaults_to_five_minutes(
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv(
+        "ACTION_EXECUTION_ATTEMPT_STALE_AFTER_SECONDS", raising=False
+    )
+
+    assert Settings().action_execution_attempt_stale_after_seconds == 300
+
+
+def test_stale_execution_assessment_threshold_is_process_overridable(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("ACTION_EXECUTION_ATTEMPT_STALE_AFTER_SECONDS", "900")
+
+    assert Settings().action_execution_attempt_stale_after_seconds == 900
+
+
+@pytest.mark.parametrize("invalid_threshold", ["0", "-1"])
+def test_stale_execution_assessment_threshold_must_be_positive(
+    monkeypatch, invalid_threshold: str
+) -> None:
+    monkeypatch.setenv(
+        "ACTION_EXECUTION_ATTEMPT_STALE_AFTER_SECONDS", invalid_threshold
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="ACTION_EXECUTION_ATTEMPT_STALE_AFTER_SECONDS must be greater than zero",
+    ):
+        Settings()
