@@ -1,5 +1,9 @@
 from db.models import ActionExecutionRecord, ActionProposalRecord
-from domain.action_execution import ActionExecutionRead
+from domain.action_execution import (
+    ActionExecutionRead,
+    FailureCause,
+    OutcomeCertainty,
+)
 from domain.action_proposal import ApprovalStatus
 from domain.ai import InvestigationRuntime
 from repositories.action_execution_repository import ActionExecutionRepository
@@ -47,9 +51,11 @@ class ActionExecutionService:
 
         capability_name = proposal.action_type.value
         self._policy.authorize(capability_name)
-        execution, created = self._repository.start(proposal, runtime)
+        execution, attempt, created = self._repository.start(proposal, runtime)
         if not created:
             return ActionExecutionRead.model_validate(execution)
+        if attempt is None:
+            raise RuntimeError("First execution attempt was not persisted")
 
         arguments = self._persisted_arguments(proposal)
         try:
@@ -58,22 +64,48 @@ class ActionExecutionService:
             execution = self._repository.fail(
                 proposal,
                 execution,
+                attempt,
                 runtime,
-                {"code": "capability_failure", "message": "Controlled capability failed"},
+                {
+                    "code": "capability_failure",
+                    "message": "Controlled capability failed",
+                },
+                FailureCause.TOOL_EXCEPTION,
+                None,
             )
             return ActionExecutionRead.model_validate(execution)
 
         if tool_result.success:
             execution = self._repository.complete(
-                proposal, execution, runtime, tool_result.model_dump(mode="json")
+                proposal,
+                execution,
+                attempt,
+                runtime,
+                tool_result.model_dump(mode="json"),
             )
         else:
-            error = tool_result.error.model_dump(mode="json") if tool_result.error else {
-                "code": "capability_failure",
-                "message": "Controlled capability failed",
+            error = (
+                tool_result.error.model_dump(mode="json")
+                if tool_result.error
+                else {
+                    "code": "capability_failure",
+                    "message": "Controlled capability failed",
+                }
+            )
+            safe_pre_mutation_failure = error["code"] in {
+                "application_not_found",
+                "service_not_found",
             }
             execution = self._repository.fail(
-                proposal, execution, runtime, error
+                proposal,
+                execution,
+                attempt,
+                runtime,
+                error,
+                FailureCause.TOOL_REJECTED,
+                OutcomeCertainty.NOT_APPLIED
+                if safe_pre_mutation_failure
+                else None,
             )
         return ActionExecutionRead.model_validate(execution)
 

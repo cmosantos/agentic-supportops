@@ -4,9 +4,21 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from db.models import ActionExecutionRecord, ActionProposalRecord
-from domain.action_execution import ActionExecutionStatus
+from db.models import (
+    ActionExecutionAttemptRecord,
+    ActionExecutionRecord,
+    ActionProposalRecord,
+)
+from domain.action_execution import (
+    ActionExecutionCompletionBasis,
+    ActionExecutionStatus,
+    FailureCause,
+    OutcomeCertainty,
+)
 from domain.ai import InvestigationEventType, InvestigationRuntime
+from repositories.action_execution_attempt_repository import (
+    ActionExecutionAttemptRepository,
+)
 from repositories.investigation_repository import InvestigationRepository
 
 
@@ -14,6 +26,7 @@ class ActionExecutionRepository:
     def __init__(self, session: Session) -> None:
         self._session = session
         self._investigations = InvestigationRepository(session)
+        self._attempts = ActionExecutionAttemptRepository(session)
 
     def get_proposal(
         self, incident_id: int, investigation_id: int, proposal_id: int
@@ -35,10 +48,12 @@ class ActionExecutionRepository:
 
     def start(
         self, proposal: ActionProposalRecord, runtime: InvestigationRuntime
-    ) -> tuple[ActionExecutionRecord, bool]:
+    ) -> tuple[
+        ActionExecutionRecord, ActionExecutionAttemptRecord | None, bool
+    ]:
         existing = self.get_for_proposal(proposal.id)
         if existing is not None:
-            return existing, False
+            return existing, self._attempts.get_canonical_attempt(existing.id), False
 
         now = datetime.now(timezone.utc)
         record = ActionExecutionRecord(
@@ -51,6 +66,7 @@ class ActionExecutionRepository:
         self._session.add(record)
         try:
             self._session.flush()
+            attempt = self._attempts.create_first_attempt(record.id, now)
             sequence = self._investigations.next_event_sequence(
                 proposal.investigation_id
             )
@@ -79,38 +95,69 @@ class ActionExecutionRepository:
             existing = self.get_for_proposal(proposal.id)
             if existing is None:
                 raise
-            return existing, False
+            return existing, self._attempts.get_canonical_attempt(existing.id), False
+        except Exception:
+            self._session.rollback()
+            raise
         self._session.refresh(record)
-        return record, True
+        self._session.refresh(attempt)
+        return record, attempt, True
 
     def complete(
         self,
         proposal: ActionProposalRecord,
         record: ActionExecutionRecord,
+        attempt: ActionExecutionAttemptRecord,
         runtime: InvestigationRuntime,
         result: dict,
     ) -> ActionExecutionRecord:
-        record.status = ActionExecutionStatus.COMPLETED
-        record.completed_at = datetime.now(timezone.utc)
-        record.result = result
-        self._record_terminal(
-            proposal, record, runtime, InvestigationEventType.EXECUTION_COMPLETED
-        )
+        completed_at = datetime.now(timezone.utc)
+        try:
+            self._attempts.complete(attempt, completed_at, result)
+            record.status = ActionExecutionStatus.COMPLETED
+            record.completed_at = completed_at
+            record.result = result
+            record.error = None
+            record.completion_basis = (
+                ActionExecutionCompletionBasis.ACKNOWLEDGED_RESULT
+            )
+            self._record_terminal(
+                proposal, record, runtime, InvestigationEventType.EXECUTION_COMPLETED
+            )
+        except Exception:
+            self._session.rollback()
+            raise
         return record
 
     def fail(
         self,
         proposal: ActionProposalRecord,
         record: ActionExecutionRecord,
+        attempt: ActionExecutionAttemptRecord,
         runtime: InvestigationRuntime,
         error: dict,
+        failure_cause: FailureCause,
+        outcome_certainty: OutcomeCertainty | None,
     ) -> ActionExecutionRecord:
-        record.status = ActionExecutionStatus.FAILED
-        record.completed_at = datetime.now(timezone.utc)
-        record.error = error
-        self._record_terminal(
-            proposal, record, runtime, InvestigationEventType.EXECUTION_FAILED
-        )
+        completed_at = datetime.now(timezone.utc)
+        try:
+            self._attempts.fail(
+                attempt,
+                completed_at,
+                error,
+                failure_cause,
+                outcome_certainty,
+            )
+            record.status = ActionExecutionStatus.FAILED
+            record.completed_at = completed_at
+            record.result = None
+            record.error = error
+            self._record_terminal(
+                proposal, record, runtime, InvestigationEventType.EXECUTION_FAILED
+            )
+        except Exception:
+            self._session.rollback()
+            raise
         return record
 
     def _record_terminal(
