@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -18,6 +18,7 @@ from domain.action_execution import (
 from domain.ai import InvestigationEventType, InvestigationRuntime
 from repositories.action_execution_attempt_repository import (
     ActionExecutionAttemptRepository,
+    InvalidActionExecutionAttemptTransitionError,
 )
 from repositories.investigation_repository import InvestigationRepository
 
@@ -103,6 +104,20 @@ class ActionExecutionRepository:
         self._session.refresh(attempt)
         return record, attempt, True
 
+    def mark_invocation_started(
+        self, attempt: ActionExecutionAttemptRecord
+    ) -> ActionExecutionAttemptRecord:
+        try:
+            self._attempts.mark_invocation_started(
+                attempt, datetime.now(timezone.utc)
+            )
+            self._commit()
+        except Exception:
+            self._session.rollback()
+            raise
+        self._session.refresh(attempt)
+        return attempt
+
     def complete(
         self,
         proposal: ActionProposalRecord,
@@ -158,6 +173,63 @@ class ActionExecutionRepository:
         except Exception:
             self._session.rollback()
             raise
+        return record
+
+    def mark_outcome_unknown(
+        self,
+        proposal: ActionProposalRecord,
+        record: ActionExecutionRecord,
+        attempt: ActionExecutionAttemptRecord,
+        runtime: InvestigationRuntime,
+        error: dict,
+        failure_cause: FailureCause,
+    ) -> ActionExecutionRecord:
+        classified_at = datetime.now(timezone.utc)
+        try:
+            self._attempts.mark_outcome_unknown(
+                attempt, classified_at, error, failure_cause
+            )
+            outcome = self._session.execute(
+                update(ActionExecutionRecord)
+                .where(
+                    ActionExecutionRecord.id == record.id,
+                    ActionExecutionRecord.status == ActionExecutionStatus.RUNNING,
+                )
+                .values(
+                    status=ActionExecutionStatus.OUTCOME_UNKNOWN,
+                    completed_at=None,
+                    result=None,
+                    error=error,
+                    completion_basis=None,
+                )
+                .execution_options(synchronize_session="fetch")
+            )
+            if outcome.rowcount != 1:
+                raise InvalidActionExecutionAttemptTransitionError(
+                    f"Execution {record.id} is no longer running"
+                )
+            metadata = self._metadata(proposal, record)
+            metadata.update(
+                {
+                    "attempt_id": attempt.id,
+                    "failure_cause": failure_cause.value,
+                }
+            )
+            self._investigations.record_event(
+                proposal.investigation_id,
+                runtime,
+                InvestigationEventType.EXECUTION_ATTEMPT_OUTCOME_UNKNOWN,
+                self._investigations.next_event_sequence(proposal.investigation_id),
+                commit=False,
+                status=ActionExecutionStatus.OUTCOME_UNKNOWN.value,
+                metadata=metadata,
+            )
+            self._commit()
+        except Exception:
+            self._session.rollback()
+            raise
+        self._session.refresh(record)
+        self._session.refresh(attempt)
         return record
 
     def _record_terminal(

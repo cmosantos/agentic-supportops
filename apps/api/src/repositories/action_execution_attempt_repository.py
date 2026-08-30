@@ -44,6 +44,25 @@ class ActionExecutionAttemptRepository:
             )
         )
 
+    def mark_invocation_started(
+        self, record: ActionExecutionAttemptRecord, started_at: datetime
+    ) -> None:
+        outcome = self._session.execute(
+            update(ActionExecutionAttemptRecord)
+            .where(
+                ActionExecutionAttemptRecord.id == record.id,
+                ActionExecutionAttemptRecord.status
+                == ActionExecutionAttemptStatus.RUNNING,
+                ActionExecutionAttemptRecord.invocation_started_at.is_(None),
+            )
+            .values(invocation_started_at=started_at)
+            .execution_options(synchronize_session="fetch")
+        )
+        if outcome.rowcount != 1:
+            raise InvalidActionExecutionAttemptTransitionError(
+                f"Attempt {record.id} cannot enter invocation twice"
+            )
+
     def complete(
         self,
         record: ActionExecutionAttemptRecord,
@@ -76,6 +95,23 @@ class ActionExecutionAttemptRepository:
             error=error,
             failure_cause=failure_cause,
             outcome_certainty=outcome_certainty,
+        )
+
+    def mark_outcome_unknown(
+        self,
+        record: ActionExecutionAttemptRecord,
+        completed_at: datetime,
+        error: dict,
+        failure_cause: FailureCause,
+    ) -> None:
+        self._terminalize(
+            record,
+            status=ActionExecutionAttemptStatus.OUTCOME_UNKNOWN,
+            completed_at=completed_at,
+            result=None,
+            error=error,
+            failure_cause=failure_cause,
+            outcome_certainty=OutcomeCertainty.UNKNOWN,
         )
 
     def _terminalize(

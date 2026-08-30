@@ -1,6 +1,6 @@
 from collections.abc import Generator
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from threading import Barrier, Lock
 
 import pytest
@@ -24,7 +24,12 @@ from domain.action_execution import (
     OutcomeCertainty,
 )
 from domain.ai import InvestigationEventType
+from domain.investigation import ToolResult
 from main import app
+from repositories.action_execution_attempt_repository import (
+    ActionExecutionAttemptRepository,
+    InvalidActionExecutionAttemptTransitionError,
+)
 from repositories.action_execution_repository import ActionExecutionRepository
 from repositories.investigation_repository import InvestigationRepository
 from simulation.repository import SimulationRepository
@@ -64,7 +69,9 @@ def execute_url(investigation_id: int, proposal_id: int) -> str:
 @pytest.fixture
 def execution_context(
     tmp_path, monkeypatch: pytest.MonkeyPatch
-) -> Generator[tuple[TestClient, sessionmaker], None, None]:
+) -> Generator[
+    tuple[TestClient, sessionmaker, SimulationRepository], None, None
+]:
     engine = create_engine(
         f"sqlite:///{tmp_path / 'execution-attempt.db'}",
         connect_args={"check_same_thread": False},
@@ -88,7 +95,7 @@ def execution_context(
         controlled_repository
     )
     with TestClient(app) as client:
-        yield client, sessions
+        yield client, sessions, controlled_repository
     app.dependency_overrides.clear()
     Base.metadata.drop_all(bind=engine)
     engine.dispose()
@@ -116,6 +123,7 @@ def persisted_execution_state(sessions: sessionmaker) -> tuple:
                             InvestigationEventType.EXECUTION_STARTED,
                             InvestigationEventType.EXECUTION_COMPLETED,
                             InvestigationEventType.EXECUTION_FAILED,
+                            InvestigationEventType.EXECUTION_ATTEMPT_OUTCOME_UNKNOWN,
                         )
                     )
                 ).order_by(InvestigationEventRecord.sequence)
@@ -185,7 +193,7 @@ def test_approved_proposal_executes_persisted_action_once_and_is_audited(
 def test_success_persists_first_attempt_and_acknowledged_completion(
     execution_context, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    client, sessions = execution_context
+    client, sessions, _ = execution_context
     investigation_id, proposal_id = approved_execution(client)
     calls = 0
     original = ActionTools.restart_simulated_service
@@ -193,6 +201,19 @@ def test_success_persists_first_attempt_and_acknowledged_completion(
     def counted(self, target, service_name):
         nonlocal calls
         calls += 1
+        with sessions() as session:
+            durable_attempt = session.scalar(select(ActionExecutionAttemptRecord))
+            assert durable_attempt.status == ActionExecutionAttemptStatus.RUNNING
+            assert durable_attempt.invocation_started_at is not None
+            original_started_at = durable_attempt.invocation_started_at
+            with pytest.raises(InvalidActionExecutionAttemptTransitionError):
+                ActionExecutionAttemptRepository(session).mark_invocation_started(
+                    durable_attempt, original_started_at + timedelta(seconds=1)
+                )
+            session.rollback()
+        with sessions() as session:
+            durable_attempt = session.scalar(select(ActionExecutionAttemptRecord))
+            assert durable_attempt.invocation_started_at == original_started_at
         return original(self, target, service_name)
 
     monkeypatch.setattr(ActionTools, "restart_simulated_service", counted)
@@ -208,7 +229,7 @@ def test_success_persists_first_attempt_and_acknowledged_completion(
     assert attempt.execution_id == execution.id
     assert attempt.attempt_number == 1
     assert attempt.status == ActionExecutionAttemptStatus.COMPLETED
-    assert attempt.invocation_started_at is None
+    assert attempt.invocation_started_at is not None
     assert attempt.outcome_certainty == OutcomeCertainty.APPLIED_ACKNOWLEDGED
     assert attempt.result == execution.result == response.json()["result"]
     assert [event.event_type for event in events] == [
@@ -221,7 +242,7 @@ def test_success_persists_first_attempt_and_acknowledged_completion(
 def test_known_pre_mutation_failure_persists_not_applied_attempt(
     execution_context, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    client, sessions = execution_context
+    client, sessions, _ = execution_context
     investigation_id, proposal_id = approved_execution(client, target="UNKNOWN-APP")
     calls = 0
     original = ActionTools.restart_simulated_service
@@ -245,6 +266,7 @@ def test_known_pre_mutation_failure_persists_not_applied_attempt(
     assert execution.completion_basis is None
     assert len(attempts) == 1
     assert attempts[0].status == ActionExecutionAttemptStatus.FAILED
+    assert attempts[0].invocation_started_at is not None
     assert attempts[0].failure_cause == FailureCause.TOOL_REJECTED
     assert attempts[0].outcome_certainty == OutcomeCertainty.NOT_APPLIED
     assert attempts[0].error == execution.error == response.json()["error"]
@@ -254,7 +276,7 @@ def test_known_pre_mutation_failure_persists_not_applied_attempt(
 def test_duplicate_execution_returns_canonical_record_without_second_attempt(
     execution_context, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    client, sessions = execution_context
+    client, sessions, _ = execution_context
     investigation_id, proposal_id = approved_execution(client)
     calls = 0
     original = ActionTools.restart_simulated_service
@@ -278,10 +300,10 @@ def test_duplicate_execution_returns_canonical_record_without_second_attempt(
     assert len(events) == 3
 
 
-def test_unexpected_capability_exception_preserves_failure_without_certainty(
+def test_unexpected_capability_exception_becomes_outcome_unknown(
     execution_context, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    client, sessions = execution_context
+    client, sessions, _ = execution_context
     investigation_id, proposal_id = approved_execution(client)
     calls = 0
 
@@ -300,21 +322,110 @@ def test_unexpected_capability_exception_preserves_failure_without_certainty(
 
     assert response.status_code == 200
     assert duplicate.json() == response.json()
-    assert response.json()["status"] == "failed"
-    assert response.json()["error"]["code"] == "capability_failure"
+    assert response.json()["status"] == "outcome_unknown"
+    assert response.json()["error"]["code"] == "capability_outcome_unknown"
     assert calls == 1
-    assert execution.status == ActionExecutionStatus.FAILED
+    assert execution.status == ActionExecutionStatus.OUTCOME_UNKNOWN
+    assert execution.completed_at is None
     assert len(attempts) == 1
-    assert attempts[0].status == ActionExecutionAttemptStatus.FAILED
+    assert attempts[0].status == ActionExecutionAttemptStatus.OUTCOME_UNKNOWN
+    assert attempts[0].invocation_started_at is not None
     assert attempts[0].failure_cause == FailureCause.TOOL_EXCEPTION
-    assert attempts[0].outcome_certainty is None
-    assert events[-1].event_type == InvestigationEventType.EXECUTION_FAILED
+    assert attempts[0].outcome_certainty == OutcomeCertainty.UNKNOWN
+    assert (
+        events[-1].event_type
+        == InvestigationEventType.EXECUTION_ATTEMPT_OUTCOME_UNKNOWN
+    )
+    assert events[-1].event_metadata["attempt_id"] == attempts[0].id
+    assert events[-1].event_metadata["failure_cause"] == "tool_exception"
+
+
+def test_side_effect_then_exception_preserves_mutation_as_outcome_unknown(
+    execution_context, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, sessions, simulation = execution_context
+    investigation_id, proposal_id = approved_execution(client)
+    calls = 0
+
+    def mutate_then_fail(self, target, service_name):
+        nonlocal calls
+        calls += 1
+        self._repository.restart_application(target)
+        raise RuntimeError("acknowledgement lost after mutation")
+
+    monkeypatch.setattr(ActionTools, "restart_simulated_service", mutate_then_fail)
+    url = execute_url(investigation_id, proposal_id)
+    first = client.post(url)
+    second = client.post(url)
+    execution, attempts, events = persisted_execution_state(sessions)
+
+    assert simulation.get_application_for_action("SUPPORT-API").status == "healthy"
+    assert first.json() == second.json()
+    assert first.json()["status"] == "outcome_unknown"
+    assert calls == 1
+    assert execution.status == ActionExecutionStatus.OUTCOME_UNKNOWN
+    assert len(attempts) == 1
+    assert attempts[0].status == ActionExecutionAttemptStatus.OUTCOME_UNKNOWN
+    assert attempts[0].failure_cause == FailureCause.TOOL_EXCEPTION
+    assert attempts[0].outcome_certainty == OutcomeCertainty.UNKNOWN
+    assert events[-1].event_type == (
+        InvestigationEventType.EXECUTION_ATTEMPT_OUTCOME_UNKNOWN
+    )
+
+
+def test_malformed_result_becomes_outcome_unknown_without_retry(
+    execution_context, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, sessions, _ = execution_context
+    investigation_id, proposal_id = approved_execution(client)
+    calls = 0
+
+    def malformed(self, target, service_name):
+        nonlocal calls
+        calls += 1
+        return ToolResult(
+            tool="restart_simulated_service",
+            resource=target,
+            success=True,
+        )
+
+    monkeypatch.setattr(ActionTools, "restart_simulated_service", malformed)
+    url = execute_url(investigation_id, proposal_id)
+    first = client.post(url)
+    second = client.post(url)
+    execution, attempts, _ = persisted_execution_state(sessions)
+
+    assert first.json() == second.json()
+    assert first.json()["status"] == "outcome_unknown"
+    assert calls == 1
+    assert execution.status == ActionExecutionStatus.OUTCOME_UNKNOWN
+    assert attempts[0].failure_cause == FailureCause.RESULT_INVALID
+    assert attempts[0].outcome_certainty == OutcomeCertainty.UNKNOWN
+
+
+def test_timeout_after_invocation_becomes_outcome_unknown(
+    execution_context, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, sessions, _ = execution_context
+    investigation_id, proposal_id = approved_execution(client)
+
+    def timeout(self, target, service_name):
+        raise TimeoutError("simulated synchronous capability timeout")
+
+    monkeypatch.setattr(ActionTools, "restart_simulated_service", timeout)
+    response = client.post(execute_url(investigation_id, proposal_id))
+    execution, attempts, _ = persisted_execution_state(sessions)
+
+    assert response.json()["status"] == "outcome_unknown"
+    assert execution.status == ActionExecutionStatus.OUTCOME_UNKNOWN
+    assert attempts[0].failure_cause == FailureCause.TIMEOUT
+    assert attempts[0].outcome_certainty == OutcomeCertainty.UNKNOWN
 
 
 def test_concurrent_execution_claim_invokes_capability_once(
     execution_context, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    client, sessions = execution_context
+    client, sessions, _ = execution_context
     investigation_id, proposal_id = approved_execution(client)
     claim_barrier = Barrier(2)
     calls = 0
@@ -355,7 +466,7 @@ def test_concurrent_execution_claim_invokes_capability_once(
 def test_initial_transaction_failure_rolls_back_before_capability(
     execution_context, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    client, sessions = execution_context
+    client, sessions, _ = execution_context
     investigation_id, proposal_id = approved_execution(client)
     calls = 0
     original_event = InvestigationRepository.record_event
@@ -384,10 +495,48 @@ def test_initial_transaction_failure_rolls_back_before_capability(
     assert events == []
 
 
-def test_terminal_event_failure_rolls_back_attempt_and_aggregate_together(
+def test_invocation_marker_persistence_failure_prevents_capability(
     execution_context, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    client, sessions = execution_context
+    client, sessions, _ = execution_context
+    investigation_id, proposal_id = approved_execution(client)
+    commit_calls = 0
+    capability_calls = 0
+    original_commit = ActionExecutionRepository._commit
+
+    def fail_marker_commit(self):
+        nonlocal commit_calls
+        commit_calls += 1
+        if commit_calls == 2:
+            raise RuntimeError("simulated invocation marker persistence failure")
+        return original_commit(self)
+
+    def counted(*args, **kwargs):
+        nonlocal capability_calls
+        capability_calls += 1
+
+    monkeypatch.setattr(ActionExecutionRepository, "_commit", fail_marker_commit)
+    monkeypatch.setattr(ActionTools, "restart_simulated_service", counted)
+
+    with pytest.raises(RuntimeError, match="invocation marker persistence failure"):
+        client.post(execute_url(investigation_id, proposal_id))
+    execution, attempts, events = persisted_execution_state(sessions)
+
+    assert capability_calls == 0
+    assert execution.status == ActionExecutionStatus.RUNNING
+    assert len(attempts) == 1
+    assert attempts[0].status == ActionExecutionAttemptStatus.RUNNING
+    assert attempts[0].invocation_started_at is None
+    assert [event.event_type for event in events] == [
+        InvestigationEventType.EXECUTION_REQUESTED,
+        InvestigationEventType.EXECUTION_STARTED,
+    ]
+
+
+def test_terminal_failure_is_classified_unknown_in_separate_transaction(
+    execution_context, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, sessions, _ = execution_context
     investigation_id, proposal_id = approved_execution(client)
     original_event = InvestigationRepository.record_event
     original_action = ActionTools.restart_simulated_service
@@ -410,19 +559,69 @@ def test_terminal_event_failure_rolls_back_attempt_and_aggregate_together(
     monkeypatch.setattr(InvestigationRepository, "record_event", fail_completed_event)
     monkeypatch.setattr(ActionTools, "restart_simulated_service", counted)
 
-    with pytest.raises(RuntimeError, match="terminal event persistence failure"):
+    response = client.post(execute_url(investigation_id, proposal_id))
+    duplicate = client.post(execute_url(investigation_id, proposal_id))
+    execution, attempts, events = persisted_execution_state(sessions)
+
+    assert response.status_code == duplicate.status_code == 200
+    assert response.json() == duplicate.json()
+    assert response.json()["status"] == "outcome_unknown"
+    assert calls == 1
+    assert execution.status == ActionExecutionStatus.OUTCOME_UNKNOWN
+    assert execution.completed_at is None
+    assert len(attempts) == 1
+    assert attempts[0].status == ActionExecutionAttemptStatus.OUTCOME_UNKNOWN
+    assert attempts[0].completed_at is not None
+    assert attempts[0].failure_cause == FailureCause.TERMINAL_PERSISTENCE_FAILED
+    assert attempts[0].outcome_certainty == OutcomeCertainty.UNKNOWN
+    assert [event.event_type for event in events] == [
+        InvestigationEventType.EXECUTION_REQUESTED,
+        InvestigationEventType.EXECUTION_STARTED,
+        InvestigationEventType.EXECUTION_ATTEMPT_OUTCOME_UNKNOWN,
+    ]
+
+
+def test_terminal_and_fallback_persistence_failure_leaves_durable_running(
+    execution_context, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, sessions, _ = execution_context
+    investigation_id, proposal_id = approved_execution(client)
+    original_event = InvestigationRepository.record_event
+    original_action = ActionTools.restart_simulated_service
+    calls = 0
+
+    def fail_terminal_events(
+        self, investigation_id, runtime, event_type, sequence, **fields
+    ):
+        if event_type in {
+            InvestigationEventType.EXECUTION_COMPLETED,
+            InvestigationEventType.EXECUTION_ATTEMPT_OUTCOME_UNKNOWN,
+        }:
+            raise RuntimeError("simulated terminal persistence unavailable")
+        return original_event(
+            self, investigation_id, runtime, event_type, sequence, **fields
+        )
+
+    def counted(self, target, service_name):
+        nonlocal calls
+        calls += 1
+        return original_action(self, target, service_name)
+
+    monkeypatch.setattr(InvestigationRepository, "record_event", fail_terminal_events)
+    monkeypatch.setattr(ActionTools, "restart_simulated_service", counted)
+
+    with pytest.raises(RuntimeError, match="terminal persistence unavailable"):
         client.post(execute_url(investigation_id, proposal_id))
     duplicate = client.post(execute_url(investigation_id, proposal_id))
     execution, attempts, events = persisted_execution_state(sessions)
 
-    assert duplicate.status_code == 200
     assert duplicate.json()["status"] == "running"
     assert calls == 1
     assert execution.status == ActionExecutionStatus.RUNNING
-    assert execution.completed_at is None
     assert len(attempts) == 1
     assert attempts[0].status == ActionExecutionAttemptStatus.RUNNING
-    assert attempts[0].completed_at is None
+    assert attempts[0].invocation_started_at is not None
+    assert attempts[0].failure_cause is None
     assert [event.event_type for event in events] == [
         InvestigationEventType.EXECUTION_REQUESTED,
         InvestigationEventType.EXECUTION_STARTED,

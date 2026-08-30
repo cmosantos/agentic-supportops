@@ -131,6 +131,35 @@ def test_failed_and_missing_executions_cannot_be_verified(
     assert missing.status_code == 404
 
 
+def test_outcome_unknown_execution_cannot_use_normal_verification(
+    seeded_client: TestClient, monkeypatch
+) -> None:
+    investigation_id, proposal = create_proposal(seeded_client)
+    seeded_client.post(f"{proposal_url(investigation_id)}/{proposal['id']}/approve")
+    observer_calls = 0
+
+    def ambiguous_execution(self, target, service_name):
+        raise RuntimeError("simulated acknowledgement loss")
+
+    def counted_observer(self, application_id):
+        nonlocal observer_calls
+        observer_calls += 1
+        raise AssertionError("normal verification observer must not run")
+
+    monkeypatch.setattr(ActionTools, "restart_simulated_service", ambiguous_execution)
+    monkeypatch.setattr(MonitoringTools, "get_application_health", counted_observer)
+    execution = seeded_client.post(
+        execute_url(investigation_id, proposal["id"])
+    ).json()
+
+    response = seeded_client.post(f"/action-executions/{execution['id']}/verify")
+
+    assert execution["status"] == "outcome_unknown"
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "execution_not_completed"
+    assert observer_calls == 0
+
+
 def test_running_execution_cannot_be_verified(seeded_client: TestClient, monkeypatch) -> None:
     investigation_id, proposal = create_proposal(seeded_client)
     seeded_client.post(f"{proposal_url(investigation_id)}/{proposal['id']}/approve")

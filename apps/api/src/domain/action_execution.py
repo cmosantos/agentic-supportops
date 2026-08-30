@@ -9,6 +9,7 @@ class ActionExecutionStatus(StrEnum):
     RUNNING = "running"
     COMPLETED = "completed"
     FAILED = "failed"
+    OUTCOME_UNKNOWN = "outcome_unknown"
 
 
 class ActionExecutionAttemptStatus(StrEnum):
