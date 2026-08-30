@@ -75,6 +75,310 @@ def test_fresh_sqlite_database_remains_supported(tmp_path) -> None:
     assert "ai_investigations" in inspect(engine).get_table_names()
     assert "investigation_events" in inspect(engine).get_table_names()
     assert "action_proposals" in inspect(engine).get_table_names()
+    assert "action_execution_attempts" in inspect(engine).get_table_names()
+    assert "action_execution_reconciliations" in inspect(engine).get_table_names()
+    assert "completion_basis" in {
+        column["name"] for column in inspect(engine).get_columns("action_executions")
+    }
+    attempt_constraints = inspect(engine).get_unique_constraints(
+        "action_execution_attempts"
+    )
+    assert any(
+        item["column_names"] == ["execution_id", "attempt_number"]
+        for item in attempt_constraints
+    )
+    running_index = next(
+        item
+        for item in inspect(engine).get_indexes("action_execution_attempts")
+        if item["name"] == "uq_action_execution_attempts_running_execution"
+    )
+    assert bool(running_index["unique"]) is True
+    assert running_index["column_names"] == ["execution_id"]
+    assert any(
+        item["column_names"] == ["attempt_id"]
+        for item in inspect(engine).get_unique_constraints(
+            "action_execution_reconciliations"
+        )
+    )
+    engine.dispose()
+
+
+def _legacy_execution_engine(tmp_path, name: str, rows: list[dict]):
+    engine = create_engine(f"sqlite:///{tmp_path / name}")
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "CREATE TABLE action_executions ("
+                "id INTEGER PRIMARY KEY, proposal_id INTEGER NOT NULL UNIQUE, "
+                "incident_id INTEGER NOT NULL, capability_name VARCHAR(100) NOT NULL, "
+                "status VARCHAR(20) NOT NULL, requested_at DATETIME NOT NULL, "
+                "started_at DATETIME NOT NULL, completed_at DATETIME, "
+                "result JSON, error JSON)"
+            )
+        )
+        for row in rows:
+            connection.execute(
+                text(
+                    "INSERT INTO action_executions "
+                    "(id, proposal_id, incident_id, capability_name, status, "
+                    "requested_at, started_at, completed_at, result, error) "
+                    "VALUES (:id, :proposal_id, 23, 'restart_simulated_service', "
+                    ":status, '2026-08-29 12:00:00', '2026-08-29 12:00:01', "
+                    ":completed_at, :result, :error)"
+                ),
+                row,
+            )
+    ensure_sqlite_schema_compatibility(engine)
+    Base.metadata.create_all(engine)
+    ensure_sqlite_schema_compatibility(engine)
+    return engine
+
+
+def _attempt_and_execution(engine, execution_id: int = 1):
+    with engine.connect() as connection:
+        attempt = connection.execute(
+            text(
+                "SELECT attempt_number, status, claimed_at, invocation_started_at, "
+                "completed_at, result, error, failure_cause, outcome_certainty "
+                "FROM action_execution_attempts WHERE execution_id=:execution_id"
+            ),
+            {"execution_id": execution_id},
+        ).one()
+        basis = connection.execute(
+            text(
+                "SELECT completion_basis FROM action_executions "
+                "WHERE id=:execution_id"
+            ),
+            {"execution_id": execution_id},
+        ).scalar_one()
+    return attempt, basis
+
+
+def test_legacy_completed_execution_receives_acknowledged_attempt(tmp_path) -> None:
+    engine = _legacy_execution_engine(
+        tmp_path,
+        "legacy-completed.db",
+        [
+            {
+                "id": 1,
+                "proposal_id": 101,
+                "status": "COMPLETED",
+                "completed_at": "2026-08-29 12:00:02",
+                "result": '{"success":true,"data":{"current_state":"healthy"}}',
+                "error": None,
+            }
+        ],
+    )
+
+    attempt, basis = _attempt_and_execution(engine)
+
+    assert attempt.attempt_number == 1
+    assert attempt.status == "COMPLETED"
+    assert attempt.result == '{"success":true,"data":{"current_state":"healthy"}}'
+    assert attempt.failure_cause is None
+    assert attempt.outcome_certainty == "APPLIED_ACKNOWLEDGED"
+    assert basis == "LEGACY_RECORDED"
+    engine.dispose()
+
+
+def test_legacy_known_and_ambiguous_failures_preserve_certainty(tmp_path) -> None:
+    engine = _legacy_execution_engine(
+        tmp_path,
+        "legacy-failed.db",
+        [
+            {
+                "id": 1,
+                "proposal_id": 101,
+                "status": "FAILED",
+                "completed_at": "2026-08-29 12:00:02",
+                "result": None,
+                "error": '{"code":"application_not_found","message":"missing"}',
+            },
+            {
+                "id": 2,
+                "proposal_id": 102,
+                "status": "FAILED",
+                "completed_at": "2026-08-29 12:00:03",
+                "result": None,
+                "error": '{"code":"service_not_found","message":"missing"}',
+            },
+            {
+                "id": 3,
+                "proposal_id": 103,
+                "status": "FAILED",
+                "completed_at": "2026-08-29 12:00:04",
+                "result": None,
+                "error": '{"code":"capability_failure","message":"failed"}',
+            },
+        ],
+    )
+
+    known, known_basis = _attempt_and_execution(engine, 1)
+    known_service, known_service_basis = _attempt_and_execution(engine, 2)
+    ambiguous, ambiguous_basis = _attempt_and_execution(engine, 3)
+
+    assert known.status == "FAILED"
+    assert known.failure_cause == "TOOL_REJECTED"
+    assert known.outcome_certainty == "NOT_APPLIED"
+    assert known_basis == "LEGACY_RECORDED"
+    assert known_service.status == "FAILED"
+    assert known_service.failure_cause == "TOOL_REJECTED"
+    assert known_service.outcome_certainty == "NOT_APPLIED"
+    assert known_service_basis == "LEGACY_RECORDED"
+    assert ambiguous.status == "FAILED"
+    assert ambiguous.failure_cause == "LEGACY_UNCLASSIFIED"
+    assert ambiguous.outcome_certainty == "LEGACY_UNDETERMINED"
+    assert ambiguous_basis == "LEGACY_RECORDED"
+    engine.dispose()
+
+
+def test_legacy_running_execution_remains_running_without_fabricated_outcome(
+    tmp_path,
+) -> None:
+    engine = _legacy_execution_engine(
+        tmp_path,
+        "legacy-running.db",
+        [
+            {
+                "id": 1,
+                "proposal_id": 101,
+                "status": "RUNNING",
+                "completed_at": None,
+                "result": None,
+                "error": None,
+            }
+        ],
+    )
+
+    attempt, basis = _attempt_and_execution(engine)
+
+    assert attempt.status == "RUNNING"
+    assert attempt.claimed_at == "2026-08-29 12:00:01"
+    assert attempt.invocation_started_at is None
+    assert attempt.completed_at is None
+    assert attempt.failure_cause is None
+    assert attempt.outcome_certainty is None
+    assert basis is None
+    engine.dispose()
+
+
+def test_execution_attempt_backfill_is_idempotent(tmp_path) -> None:
+    engine = _legacy_execution_engine(
+        tmp_path,
+        "legacy-idempotent.db",
+        [
+            {
+                "id": 1,
+                "proposal_id": 101,
+                "status": "COMPLETED",
+                "completed_at": "2026-08-29 12:00:02",
+                "result": '{"success":true}',
+                "error": None,
+            }
+        ],
+    )
+    with engine.connect() as connection:
+        before = connection.execute(
+            text("SELECT * FROM action_execution_attempts")
+        ).one()
+
+    ensure_sqlite_schema_compatibility(engine)
+    Base.metadata.create_all(engine)
+    ensure_sqlite_schema_compatibility(engine)
+
+    with engine.connect() as connection:
+        after = connection.execute(
+            text("SELECT * FROM action_execution_attempts")
+        ).one()
+        count = connection.execute(
+            text("SELECT COUNT(*) FROM action_execution_attempts")
+        ).scalar_one()
+    running_indexes = [
+        item
+        for item in inspect(engine).get_indexes("action_execution_attempts")
+        if item["name"] == "uq_action_execution_attempts_running_execution"
+    ]
+    assert after == before
+    assert count == 1
+    assert len(running_indexes) == 1
+    engine.dispose()
+
+
+def test_execution_attempt_and_reconciliation_constraints_are_database_backed(
+    tmp_path,
+) -> None:
+    engine = _legacy_execution_engine(
+        tmp_path,
+        "attempt-constraints.db",
+        [
+            {
+                "id": 1,
+                "proposal_id": 101,
+                "status": "FAILED",
+                "completed_at": "2026-08-29 12:00:02",
+                "result": None,
+                "error": '{"code":"application_not_found"}',
+            }
+        ],
+    )
+    with pytest.raises(IntegrityError):
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "INSERT INTO action_execution_attempts "
+                    "(execution_id, attempt_number, status, claimed_at, created_at) "
+                    "VALUES (1, 1, 'FAILED', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+                )
+            )
+
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO action_execution_attempts "
+                "(execution_id, attempt_number, status, claimed_at, created_at) "
+                "VALUES (1, 2, 'RUNNING', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+            )
+        )
+    with pytest.raises(IntegrityError):
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "INSERT INTO action_execution_attempts "
+                    "(execution_id, attempt_number, status, claimed_at, created_at) "
+                    "VALUES (1, 3, 'RUNNING', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+                )
+            )
+
+    with engine.begin() as connection:
+        running_attempt = connection.execute(
+            text(
+                "SELECT id FROM action_execution_attempts "
+                "WHERE execution_id=1 AND attempt_number=2"
+            )
+        ).scalar_one()
+        connection.execute(
+            text(
+                "INSERT INTO action_execution_reconciliations "
+                "(attempt_id, execution_id, status, observer, expected_outcome, "
+                "requested_at, started_at) "
+                "VALUES (:attempt_id, 1, 'RUNNING', 'get_application_health', "
+                "'{\"state\":\"healthy\"}', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+            ),
+            {"attempt_id": running_attempt},
+        )
+    with pytest.raises(IntegrityError):
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "INSERT INTO action_execution_reconciliations "
+                    "(attempt_id, execution_id, status, observer, expected_outcome, "
+                    "requested_at, started_at) "
+                    "VALUES (:attempt_id, 1, 'INCONCLUSIVE', "
+                    "'get_application_health', '{}', CURRENT_TIMESTAMP, "
+                    "CURRENT_TIMESTAMP)"
+                ),
+                {"attempt_id": running_attempt},
+            )
     engine.dispose()
 
 

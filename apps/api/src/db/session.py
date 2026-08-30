@@ -15,6 +15,7 @@ def initialize_database() -> None:
 
     ensure_sqlite_schema_compatibility(engine)
     Base.metadata.create_all(bind=engine)
+    ensure_sqlite_schema_compatibility(engine)
     from simulation.seed import seed_catalog
 
     with SessionLocal() as session:

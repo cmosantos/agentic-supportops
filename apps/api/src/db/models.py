@@ -8,7 +8,16 @@ from domain.incident import IncidentPriority, IncidentStatus
 from domain.investigation import InvestigationOrigin, InvestigationStepStatus
 from domain.ai import AIInvestigationStatus, InvestigationEventType, InvestigationRuntime
 from domain.action_proposal import ActionRisk, ActionType, ApprovalStatus
-from domain.action_execution import ActionExecutionStatus
+from domain.action_execution import (
+    ActionExecutionAttemptStatus,
+    ActionExecutionCompletionBasis,
+    ActionExecutionStatus,
+    FailureCause,
+    OutcomeCertainty,
+)
+from domain.action_execution_reconciliation import (
+    ActionExecutionReconciliationStatus,
+)
 from domain.outcome_verification import OutcomeVerificationStatus
 from domain.incident_resolution import ResolutionDecision
 
@@ -202,6 +211,77 @@ class ActionExecutionRecord(Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     result: Mapped[dict | None] = mapped_column(JSON)
     error: Mapped[dict | None] = mapped_column(JSON)
+    completion_basis: Mapped[ActionExecutionCompletionBasis | None] = mapped_column(
+        Enum(ActionExecutionCompletionBasis, native_enum=False), nullable=True
+    )
+
+
+class ActionExecutionAttemptRecord(Base):
+    __tablename__ = "action_execution_attempts"
+    __table_args__ = (
+        UniqueConstraint("execution_id", "attempt_number"),
+        Index(
+            "uq_action_execution_attempts_running_execution",
+            "execution_id",
+            unique=True,
+            sqlite_where=text("status = 'RUNNING'"),
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    execution_id: Mapped[int] = mapped_column(
+        ForeignKey("action_executions.id"), nullable=False, index=True
+    )
+    attempt_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[ActionExecutionAttemptStatus] = mapped_column(
+        Enum(ActionExecutionAttemptStatus, native_enum=False),
+        nullable=False,
+        index=True,
+    )
+    claimed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    invocation_started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    result: Mapped[dict | None] = mapped_column(JSON)
+    error: Mapped[dict | None] = mapped_column(JSON)
+    failure_cause: Mapped[FailureCause | None] = mapped_column(
+        Enum(FailureCause, native_enum=False), nullable=True
+    )
+    outcome_certainty: Mapped[OutcomeCertainty | None] = mapped_column(
+        Enum(OutcomeCertainty, native_enum=False), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class ActionExecutionReconciliationRecord(Base):
+    __tablename__ = "action_execution_reconciliations"
+    __table_args__ = (UniqueConstraint("attempt_id"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    attempt_id: Mapped[int] = mapped_column(
+        ForeignKey("action_execution_attempts.id"), nullable=False, index=True
+    )
+    execution_id: Mapped[int] = mapped_column(
+        ForeignKey("action_executions.id"), nullable=False, index=True
+    )
+    status: Mapped[ActionExecutionReconciliationStatus] = mapped_column(
+        Enum(ActionExecutionReconciliationStatus, native_enum=False),
+        nullable=False,
+        index=True,
+    )
+    observer: Mapped[str] = mapped_column(String(100), nullable=False)
+    expected_outcome: Mapped[dict] = mapped_column(JSON)
+    observed_outcome: Mapped[dict | None] = mapped_column(JSON)
+    evidence: Mapped[dict | None] = mapped_column(JSON)
+    error: Mapped[dict | None] = mapped_column(JSON)
+    requested_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class OutcomeVerificationRecord(Base):

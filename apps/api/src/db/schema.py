@@ -1,4 +1,9 @@
+import json
+
 from sqlalchemy import Engine, inspect, text
+
+
+_KNOWN_PRE_MUTATION_FAILURES = {"application_not_found", "service_not_found"}
 
 
 def ensure_sqlite_schema_compatibility(engine: Engine) -> None:
@@ -141,3 +146,113 @@ def ensure_sqlite_schema_compatibility(engine: Engine) -> None:
                     "WHERE status = 'RUNNING'"
                 )
             )
+
+        if "action_executions" in tables:
+            execution_columns = {
+                column["name"]
+                for column in inspector.get_columns("action_executions")
+            }
+            if "completion_basis" not in execution_columns:
+                connection.execute(
+                    text(
+                        "ALTER TABLE action_executions "
+                        "ADD COLUMN completion_basis VARCHAR(19)"
+                    )
+                )
+
+        if "action_execution_attempts" in tables:
+            connection.execute(
+                text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS "
+                    "uq_action_execution_attempts_running_execution "
+                    "ON action_execution_attempts (execution_id) "
+                    "WHERE status = 'RUNNING'"
+                )
+            )
+            if "action_executions" in tables:
+                _backfill_action_execution_attempts(connection)
+
+
+def _backfill_action_execution_attempts(connection) -> None:
+    executions = connection.execute(
+        text(
+            "SELECT execution.id, execution.status, execution.requested_at, "
+            "execution.started_at, execution.completed_at, execution.result, "
+            "execution.error "
+            "FROM action_executions AS execution "
+            "LEFT JOIN action_execution_attempts AS attempt "
+            "ON attempt.execution_id = execution.id "
+            "WHERE attempt.id IS NULL "
+            "ORDER BY execution.id"
+        )
+    ).mappings()
+    for execution in executions:
+        status = str(execution["status"]).upper()
+        values = _legacy_attempt_values(status, execution["error"])
+        connection.execute(
+            text(
+                "INSERT INTO action_execution_attempts "
+                "(execution_id, attempt_number, status, claimed_at, "
+                "invocation_started_at, completed_at, result, error, "
+                "failure_cause, outcome_certainty, created_at) "
+                "VALUES (:execution_id, 1, :status, :claimed_at, NULL, "
+                ":completed_at, :result, :error, :failure_cause, "
+                ":outcome_certainty, :created_at)"
+            ),
+            {
+                "execution_id": execution["id"],
+                "status": status,
+                "claimed_at": execution["started_at"]
+                or execution["requested_at"],
+                "completed_at": execution["completed_at"],
+                "result": execution["result"],
+                "error": execution["error"],
+                "failure_cause": values["failure_cause"],
+                "outcome_certainty": values["outcome_certainty"],
+                "created_at": execution["requested_at"]
+                or execution["started_at"],
+            },
+        )
+        if status in {"COMPLETED", "FAILED"}:
+            connection.execute(
+                text(
+                    "UPDATE action_executions "
+                    "SET completion_basis = 'LEGACY_RECORDED' "
+                    "WHERE id = :execution_id AND completion_basis IS NULL"
+                ),
+                {"execution_id": execution["id"]},
+            )
+
+
+def _legacy_attempt_values(status: str, raw_error) -> dict[str, str | None]:
+    if status == "COMPLETED":
+        return {
+            "failure_cause": None,
+            "outcome_certainty": "APPLIED_ACKNOWLEDGED",
+        }
+    if status == "FAILED":
+        error_code = _legacy_error_code(raw_error)
+        if error_code in _KNOWN_PRE_MUTATION_FAILURES:
+            return {
+                "failure_cause": "TOOL_REJECTED",
+                "outcome_certainty": "NOT_APPLIED",
+            }
+        return {
+            "failure_cause": "LEGACY_UNCLASSIFIED",
+            "outcome_certainty": "LEGACY_UNDETERMINED",
+        }
+    return {"failure_cause": None, "outcome_certainty": None}
+
+
+def _legacy_error_code(raw_error) -> str | None:
+    if raw_error is None:
+        return None
+    if isinstance(raw_error, str):
+        try:
+            raw_error = json.loads(raw_error)
+        except json.JSONDecodeError:
+            return None
+    if not isinstance(raw_error, dict):
+        return None
+    code = raw_error.get("code")
+    return str(code) if code is not None else None
