@@ -190,6 +190,7 @@ export function App() {
   const [decidingResolution, setDecidingResolution] = useState(false);
   const investigationRequest = useRef<AbortController | null>(null);
   const investigationVersion = useRef(0);
+  const proposalDecisionInFlight = useRef(false);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -313,15 +314,27 @@ export function App() {
           model: result.investigation.model,
         });
         if (result.investigation.result?.proposed_action) {
-          const proposalResponse = await fetch(
-            `${apiBaseUrl}/incidents/${reference}/investigation-runs/${result.investigation.id}/action-proposals`,
-            {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify(result.investigation.result.proposed_action),
-              signal: controller.signal,
-            },
-          );
+          const proposalUrl = `${apiBaseUrl}/incidents/${reference}/investigation-runs/${result.investigation.id}/action-proposals`;
+          const persistedResponse = await fetch(proposalUrl, { signal: controller.signal });
+          if (requestVersion !== investigationVersion.current) return;
+          if (!persistedResponse.ok) {
+            setProposalError(await investigationErrorMessage(persistedResponse));
+            return;
+          }
+          const persistedProposals: ActionProposal[] = await persistedResponse.json();
+          if (persistedProposals.length > 0) {
+            if (requestVersion === investigationVersion.current) {
+              setActionProposal(persistedProposals[0]);
+            }
+            return;
+          }
+          const proposalResponse = await fetch(proposalUrl, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(result.investigation.result.proposed_action),
+            signal: controller.signal,
+          });
+          if (requestVersion !== investigationVersion.current) return;
           if (!proposalResponse.ok) {
             setProposalError(await investigationErrorMessage(proposalResponse));
           } else if (requestVersion === investigationVersion.current) {
@@ -348,7 +361,8 @@ export function App() {
   }
 
   async function decideActionProposal(decision: "approve" | "reject") {
-    if (!selected || !actionProposal || decidingProposal) return;
+    if (!selected || !actionProposal || proposalDecisionInFlight.current) return;
+    proposalDecisionInFlight.current = true;
     setDecidingProposal(true);
     setProposalError(null);
     const reference = selected.catalog_id ?? selected.id;
@@ -368,6 +382,7 @@ export function App() {
     } catch (error: unknown) {
       setProposalError(error instanceof Error ? error.message : "Proposal decision failed");
     } finally {
+      proposalDecisionInFlight.current = false;
       setDecidingProposal(false);
     }
   }
@@ -581,13 +596,19 @@ export function App() {
                     <h3 id="proposed-action">Proposed Action</h3>
                     <p><b>Action type:</b> {displayStatus(actionProposal.action_type)}</p>
                     <p><b>Target:</b> {actionProposal.target}</p>
+                    <div className="result-section">
+                      <b>Bounded parameters</b>
+                      <pre>{JSON.stringify(actionProposal.parameters, null, 2)}</pre>
+                    </div>
                     <p><b>Rationale:</b> {actionProposal.rationale}</p>
                     <p><b>Risk level:</b> {actionProposal.risk_level}</p>
                     <p><b>Supporting evidence:</b> {actionProposal.supporting_evidence_ids.map((id) => `#${id}`).join(", ")}</p>
                     <p><b>Approval state:</b> {displayStatus(actionProposal.approval_status)}</p>
                     {actionProposal.approval_status === "pending" && (
-                      <div className="actions">
-                        <button disabled={decidingProposal} onClick={() => decideActionProposal("approve")}>Approve</button>
+                      <div className="actions" aria-busy={decidingProposal}>
+                        <button disabled={decidingProposal} onClick={() => decideActionProposal("approve")}>
+                          {decidingProposal ? "Recording decision…" : "Approve"}
+                        </button>
                         <button disabled={decidingProposal} onClick={() => decideActionProposal("reject")}>Reject</button>
                       </div>
                     )}

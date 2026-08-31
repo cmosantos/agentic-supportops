@@ -69,7 +69,7 @@ The frontend never talks to MCP directly; it calls FastAPI. MCP is an internal a
 7. A structured result completes the run, or a controlled failure marks it failed. Without useful evidence, the result becomes `insufficient_evidence` rather than presenting unsupported certainty. The terminal event and run transition share one transaction.
 8. Latest endpoints keep compatibility; historical endpoints retrieve prior runs, event timelines, and run-scoped artifacts explicitly.
 
-Models produce diagnoses, recommendations, and optional structured action proposals. The application validates proposal types, parameters, investigation ownership, and evidence references before a human may approve or reject. Approval never invokes an action automatically. For the sole executable action, a later operator request replays the exact persisted proposal through a separate execution allowlist and deterministic executor.
+Models produce diagnoses, recommendations, and optional structured action proposals. The application validates proposal types, parameters, investigation ownership, and evidence references before a human may approve or reject. The incident investigation UI displays the persisted action, target, bounded parameters, evidence references, and decision status, then submits only the operator's explicit approval or rejection through the existing decision endpoints. Approval never invokes an action automatically. For the sole executable action, a later operator request replays the exact persisted proposal through a separate execution allowlist and deterministic executor.
 
 ## 🔐 Controlled action execution
 
