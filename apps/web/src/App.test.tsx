@@ -125,6 +125,45 @@ const completedExecution = {
     },
   },
   error: null,
+  completion_basis: "acknowledged_result",
+};
+
+const outcomeUnknownExecution = {
+  ...completedExecution,
+  status: "outcome_unknown",
+  completed_at: null,
+  result: null,
+  error: { code: "capability_timeout", message: "Controlled capability timed out" },
+};
+
+const canonicalUnknownAttempt = {
+  id: 51,
+  execution_id: 50,
+  attempt_number: 1,
+  status: "outcome_unknown",
+  claimed_at: "2026-08-28T12:14:00Z",
+  invocation_started_at: "2026-08-28T12:14:00Z",
+  completed_at: "2026-08-28T12:14:01Z",
+  failure_cause: "timeout",
+  outcome_certainty: "unknown",
+};
+
+const reconciliationResult = {
+  id: 61,
+  attempt_id: 51,
+  execution_id: 50,
+  status: "desired_state_observed",
+  observer: "get_application_health",
+  expected_outcome: { state: "healthy" },
+  observed_outcome: { state: "healthy" },
+  evidence: null,
+  error: null,
+  requested_at: "2026-08-28T12:17:00Z",
+  started_at: "2026-08-28T12:17:00Z",
+  completed_at: "2026-08-28T12:17:01Z",
+  is_stale: false,
+  recoverable: false,
+  recovery_block_reason: "reconciliation_not_running",
 };
 
 const verifiedOutcome = {
@@ -169,8 +208,10 @@ function installFetch(options?: {
   coreFailure?: boolean;
   aiConfigured?: boolean;
   incidentsOverride?: readonly unknown[];
+  attempt?: (url: string, init?: RequestInit) => Promise<Response>;
   execution?: (url: string, init?: RequestInit) => Promise<Response>;
   proposals?: (url: string, init?: RequestInit) => Promise<Response>;
+  reconciliation?: (url: string, init?: RequestInit) => Promise<Response>;
   resolution?: (url: string, init?: RequestInit) => Promise<Response>;
   post?: (url: string, init?: RequestInit) => Promise<Response>;
 }) {
@@ -195,6 +236,14 @@ function installFetch(options?: {
       return options?.execution
         ? options.execution(url, init)
         : jsonResponse({ detail: { code: "action_execution_not_found", message: "Action execution not found" } }, 404);
+    }
+    if (url.endsWith("/attempt") && (!init?.method || init.method === "GET")) {
+      return options?.attempt ? options.attempt(url, init) : jsonResponse(canonicalUnknownAttempt);
+    }
+    if (url.endsWith("/reconciliation") && (!init?.method || init.method === "GET")) {
+      return options?.reconciliation
+        ? options.reconciliation(url, init)
+        : jsonResponse({ detail: { code: "action_execution_reconciliation_not_found", message: "Reconciliation not found" } }, 404);
     }
     if (options?.post) return options.post(url, init);
     throw new Error(`Unexpected request: ${url}`);
@@ -732,6 +781,183 @@ describe("Agentic SupportOps operator workflow", () => {
     expect(screen.getByText(/controls are unavailable until persisted state can be confirmed/i)).toBeVisible();
     expect(screen.queryByRole("button", { name: "Execute approved action" })).not.toBeInTheDocument();
     expect(screen.queryByText("Execution status:")).not.toBeInTheDocument();
+  });
+
+  it("shows Reconcile only for an eligible OUTCOME_UNKNOWN attempt and never starts it automatically", async () => {
+    const fetchMock = installFetch({
+      aiConfigured: true,
+      proposals: async () => jsonResponse([approvedExecutableProposal]),
+      execution: async () => jsonResponse(outcomeUnknownExecution),
+      post: async (url) => {
+        if (url.endsWith("/investigate-ai")) return jsonResponse(actionableExecution);
+        throw new Error(`Unexpected request: ${url}`);
+      },
+    });
+    render(<App />);
+    await selectIncident();
+    await userEvent.click(await screen.findByRole("button", { name: "Run AI investigation" }));
+
+    expect(await screen.findByRole("button", { name: "Reconcile state" })).toBeVisible();
+    expect(screen.getByText(/read-only observation/i)).toBeVisible();
+    expect(fetchMock.mock.calls.filter(([url, init]) => String(url).endsWith("/reconcile") && init?.method === "POST")).toHaveLength(0);
+    expect(screen.queryByRole("button", { name: /retry|execute approved/i })).not.toBeInTheDocument();
+  });
+
+  it("does not expose Reconcile for an ineligible physical attempt", async () => {
+    installFetch({
+      aiConfigured: true,
+      proposals: async () => jsonResponse([approvedExecutableProposal]),
+      execution: async () => jsonResponse(outcomeUnknownExecution),
+      attempt: async () => jsonResponse({ ...canonicalUnknownAttempt, status: "failed", outcome_certainty: "not_applied" }),
+      post: async (url) => {
+        if (url.endsWith("/investigate-ai")) return jsonResponse(actionableExecution);
+        throw new Error(`Unexpected request: ${url}`);
+      },
+    });
+    render(<App />);
+    await selectIncident();
+    await userEvent.click(await screen.findByRole("button", { name: "Run AI investigation" }));
+    await screen.findByText("Execution status:");
+
+    expect(screen.queryByRole("button", { name: "Reconcile state" })).not.toBeInTheDocument();
+  });
+
+  it("submits one explicit reconciliation request despite duplicate clicks", async () => {
+    let resolveReconciliation!: (response: Response) => void;
+    const pendingReconciliation = new Promise<Response>((resolve) => { resolveReconciliation = resolve; });
+    const fetchMock = installFetch({
+      aiConfigured: true,
+      proposals: async () => jsonResponse([approvedExecutableProposal]),
+      execution: async () => jsonResponse(outcomeUnknownExecution),
+      post: async (url) => {
+        if (url.endsWith("/investigate-ai")) return jsonResponse(actionableExecution);
+        if (url.endsWith("/reconcile")) return pendingReconciliation;
+        throw new Error(`Unexpected request: ${url}`);
+      },
+    });
+    render(<App />);
+    await selectIncident();
+    await userEvent.click(await screen.findByRole("button", { name: "Run AI investigation" }));
+    const reconcile = await screen.findByRole("button", { name: "Reconcile state" });
+    reconcile.click();
+    reconcile.click();
+
+    expect(await screen.findByRole("button", { name: "Reconciling state…" })).toBeDisabled();
+    expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith("/reconcile"))).toHaveLength(1);
+    resolveReconciliation(jsonResponse(reconciliationResult));
+    expect((await screen.findByText("Reconciliation status:")).closest("p")).toHaveTextContent("DESIRED STATE OBSERVED");
+  });
+
+  it.each([
+    ["desired_state_observed", "healthy", /does not prove that the original invocation succeeded/i],
+    ["undesired_state_observed", "degraded", /does not prove that the original mutation did not occur/i],
+    ["inconclusive", null, /reliable conclusion could not be obtained/i],
+    ["running", null, /still non-terminal/i],
+  ] as const)("rehydrates canonical reconciliation %s instead of creating another", async (status, observed, explanation) => {
+    const fetchMock = installFetch({
+      aiConfigured: true,
+      proposals: async () => jsonResponse([approvedExecutableProposal]),
+      execution: async () => jsonResponse(
+        status === "desired_state_observed"
+          ? { ...completedExecution, completion_basis: "reconciliation" }
+          : outcomeUnknownExecution,
+      ),
+      reconciliation: async () => jsonResponse({
+        ...reconciliationResult,
+        status,
+        observed_outcome: observed ? { state: observed } : null,
+        error: status === "inconclusive" ? { code: "observer_failure", message: "Reliable evidence unavailable" } : null,
+        completed_at: status === "running" ? null : reconciliationResult.completed_at,
+        recovery_block_reason: status === "running" ? "not_stale" : "reconciliation_not_running",
+      }),
+      post: async (url) => {
+        if (url.endsWith("/investigate-ai")) return jsonResponse(actionableExecution);
+        throw new Error(`Unexpected request: ${url}`);
+      },
+    });
+    render(<App />);
+    await selectIncident();
+    await userEvent.click(await screen.findByRole("button", { name: "Run AI investigation" }));
+
+    expect((await screen.findByText("Reconciliation status:")).closest("p")).toHaveTextContent(status.replaceAll("_", " ").toUpperCase());
+    expect(screen.getByText(explanation)).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Reconcile state" })).not.toBeInTheDocument();
+    expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith("/reconcile"))).toHaveLength(0);
+  });
+
+  it("shows stale RUNNING reconciliation without recovery or polling", async () => {
+    const fetchMock = installFetch({
+      aiConfigured: true,
+      proposals: async () => jsonResponse([approvedExecutableProposal]),
+      execution: async () => jsonResponse(outcomeUnknownExecution),
+      reconciliation: async () => jsonResponse({
+        ...reconciliationResult,
+        status: "running",
+        observed_outcome: null,
+        completed_at: null,
+        is_stale: true,
+        recoverable: true,
+        recovery_block_reason: null,
+      }),
+      post: async (url) => {
+        if (url.endsWith("/investigate-ai")) return jsonResponse(actionableExecution);
+        throw new Error(`Unexpected request: ${url}`);
+      },
+    });
+    render(<App />);
+    await selectIncident();
+    await userEvent.click(await screen.findByRole("button", { name: "Run AI investigation" }));
+
+    expect(await screen.findByText(/reconciliation appears stale/i)).toBeVisible();
+    expect(screen.getByText(/explicit recovery is available as a separate operation/i)).toBeVisible();
+    expect(screen.queryByRole("button", { name: /recover/i })).not.toBeInTheDocument();
+    expect(fetchMock.mock.calls.filter(([url]) => String(url).includes("/recover"))).toHaveLength(0);
+  });
+
+  it("keeps OUTCOME_UNKNOWN safe when reconciliation API fails", async () => {
+    installFetch({
+      aiConfigured: true,
+      proposals: async () => jsonResponse([approvedExecutableProposal]),
+      execution: async () => jsonResponse(outcomeUnknownExecution),
+      post: async (url) => {
+        if (url.endsWith("/investigate-ai")) return jsonResponse(actionableExecution);
+        if (url.endsWith("/reconcile")) {
+          return jsonResponse({ detail: { code: "execution_reconciliation_conflict", message: "Reconciliation unavailable" } }, 409);
+        }
+        throw new Error(`Unexpected request: ${url}`);
+      },
+    });
+    render(<App />);
+    await selectIncident();
+    await userEvent.click(await screen.findByRole("button", { name: "Run AI investigation" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Reconcile state" }));
+
+    expect(await screen.findByText("Reconciliation unavailable")).toBeVisible();
+    expect(screen.getByText("Execution status:").closest("p")).toHaveTextContent("OUTCOME UNKNOWN");
+    expect(screen.queryByRole("button", { name: /retry|execute approved/i })).not.toBeInTheDocument();
+  });
+
+  it("refreshes canonical execution after desired state reconciliation", async () => {
+    let executionReads = 0;
+    const fetchMock = installFetch({
+      aiConfigured: true,
+      proposals: async () => jsonResponse([approvedExecutableProposal]),
+      execution: async () => jsonResponse(++executionReads === 1 ? outcomeUnknownExecution : completedExecution),
+      post: async (url) => {
+        if (url.endsWith("/investigate-ai")) return jsonResponse(actionableExecution);
+        if (url.endsWith("/reconcile")) return jsonResponse(reconciliationResult);
+        throw new Error(`Unexpected request: ${url}`);
+      },
+    });
+    render(<App />);
+    await selectIncident();
+    await userEvent.click(await screen.findByRole("button", { name: "Run AI investigation" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Reconcile state" }));
+
+    expect((await screen.findByText("Execution status:")).closest("p")).toHaveTextContent("COMPLETED");
+    expect(screen.getByText("Reconciliation status:").closest("p")).toHaveTextContent("DESIRED STATE OBSERVED");
+    expect(executionReads).toBe(2);
+    expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith("/execute"))).toHaveLength(0);
   });
 
   it("shows an execution API error without inventing execution state", async () => {

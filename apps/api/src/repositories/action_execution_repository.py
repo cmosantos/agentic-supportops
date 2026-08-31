@@ -60,6 +60,9 @@ class ActionExecutionRepository:
         self._investigations = InvestigationRepository(session)
         self._attempts = ActionExecutionAttemptRepository(session)
 
+    def get_by_id(self, execution_id: int) -> ActionExecutionRecord | None:
+        return self._session.get(ActionExecutionRecord, execution_id)
+
     def get_proposal(
         self, incident_id: int, investigation_id: int, proposal_id: int
     ) -> ActionProposalRecord | None:
@@ -94,6 +97,11 @@ class ActionExecutionRepository:
                 ActionProposalRecord.investigation_id == investigation_id,
             )
         )
+
+    def get_canonical_attempt(
+        self, execution_id: int
+    ) -> ActionExecutionAttemptRecord | None:
+        return self._attempts.get_canonical_attempt(execution_id)
 
     def start(
         self, proposal: ActionProposalRecord, runtime: InvestigationRuntime

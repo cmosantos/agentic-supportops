@@ -104,6 +104,8 @@ Recovery is explicit and only claims a canonical `RUNNING` reconciliation after 
 
 `GET /action-executions/{execution_id}/attempts/{attempt_id}/reconciliation` returns persisted reconciliation state plus derived `is_stale`, `recoverable`, and typed `recovery_block_reason`. It never observes, recovers, renews a lease, creates events, or changes state. The GET is advisory; the explicit recovery POST always revalidates eligibility.
 
+The operator UI discovers attempt #1 through the side-effect-free canonical-attempt GET, then reads the reconciliation view. It exposes reconciliation only after an explicit click, never retries the mutation, and reports stale recovery eligibility without starting recovery.
+
 ## 🔎 Post-execution outcome verification
 
 Execution success proves that the approved action ran successfully. It does not prove that the incident condition was corrected. After a `COMPLETED` execution, the operator may request one canonical verification. The server derives the approved target from the persisted execution and proposal; the client supplies neither target nor observer.
@@ -314,6 +316,7 @@ FastAPI exposes the complete interactive contract at `/docs`.
 | Event history | `GET /incidents/{incident_id}/investigation-runs/{run_id}/events` |
 | Controlled execution | `POST /incidents/{incident_id}/investigation-runs/{run_id}/action-proposals/{proposal_id}/execute` |
 | Read proposal execution | `GET /incidents/{incident_id}/investigation-runs/{run_id}/action-proposals/{proposal_id}/execution` |
+| Read canonical attempt | `GET /action-executions/{execution_id}/attempt` |
 | Assess stale attempt | `POST /action-executions/{execution_id}/attempts/{attempt_id}/stale-assessment` |
 | Reconcile unknown outcome | `POST /action-executions/{execution_id}/attempts/{attempt_id}/reconcile` |
 | Recover stale reconciliation | `POST /action-executions/{execution_id}/attempts/{attempt_id}/reconciliation/recover` |

@@ -179,6 +179,8 @@ Recovery is an explicit POST for an existing canonical reconciliation that is bo
 
 `GET /action-executions/{execution_id}/attempts/{attempt_id}/reconciliation` is a side-effect-free operational view. It derives `is_stale`, `recoverable`, and typed `recovery_block_reason` without observing, creating events, or renewing a lease. Its eligibility result is advisory; the recovery POST shares the same rule evaluator and revalidates persisted state before claiming work.
 
+`GET /action-executions/{execution_id}/attempt` exposes the already-persisted canonical physical attempt without changing it. The UI uses its ID to address the existing reconciliation resources; the route performs no capability invocation, stale assessment, retry, event append, or lease/timestamp update.
+
 Execution may produce an effect. Reconciliation only observes current state after an uncertain mutation. Verification independently validates outcome after an execution is completed, including completion by reconciliation. Human resolution decides whether the incident closes. Reconciliation does not replace verification, and verification does not resolve the incident.
 
 ## Post-execution verification boundary

@@ -70,6 +70,10 @@ def execution_lookup_url(investigation_id: int, proposal_id: int) -> str:
     return f"{proposal_url(investigation_id)}/{proposal_id}/execution"
 
 
+def canonical_attempt_url(execution_id: int) -> str:
+    return f"/action-executions/{execution_id}/attempt"
+
+
 @pytest.fixture
 def execution_context(
     tmp_path, monkeypatch: pytest.MonkeyPatch
@@ -240,6 +244,54 @@ def test_repeated_execution_lookups_are_side_effect_free(
     assert first.json() == second.json() == executed.json()
     assert calls == 1
     assert snapshots_after == snapshots_before
+
+
+def test_canonical_attempt_lookup_is_side_effect_free(
+    execution_context, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, sessions, _ = execution_context
+    investigation_id, proposal_id = approved_execution(client)
+    calls = 0
+    original = ActionTools.restart_simulated_service
+
+    def counted(self, target, service_name):
+        nonlocal calls
+        calls += 1
+        return original(self, target, service_name)
+
+    monkeypatch.setattr(ActionTools, "restart_simulated_service", counted)
+    execution = client.post(execute_url(investigation_id, proposal_id)).json()
+    before = persisted_execution_state(sessions)
+
+    first = client.get(canonical_attempt_url(execution["id"]))
+    second = client.get(canonical_attempt_url(execution["id"]))
+    after = persisted_execution_state(sessions)
+
+    assert first.status_code == 200, first.text
+    assert first.json() == second.json()
+    assert first.json()["execution_id"] == execution["id"]
+    assert first.json()["attempt_number"] == 1
+    assert calls == 1
+    assert before[0].status == after[0].status
+    assert before[0].started_at == after[0].started_at
+    assert before[0].completed_at == after[0].completed_at
+    assert [(item.id, item.status) for item in before[1]] == [
+        (item.id, item.status) for item in after[1]
+    ]
+    assert [(item.id, item.sequence) for item in before[2]] == [
+        (item.id, item.sequence) for item in after[2]
+    ]
+
+
+def test_canonical_attempt_lookup_missing_execution_is_controlled_404(
+    execution_context,
+) -> None:
+    client, _, _ = execution_context
+
+    response = client.get(canonical_attempt_url(999999))
+
+    assert response.status_code == 404
+    assert response.json()["detail"]["code"] == "action_execution_not_found"
 
 
 def test_approved_proposal_executes_persisted_action_once_and_is_audited(

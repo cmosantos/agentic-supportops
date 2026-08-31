@@ -21,6 +21,7 @@ from domain.action_proposal import (
     ActionRejection,
 )
 from domain.action_execution import (
+    ActionExecutionAttemptRead,
     ActionExecutionRead,
     ActionExecutionStaleAssessmentRead,
 )
@@ -56,6 +57,7 @@ from services.action_proposal_service import (
     InvalidActionTypeError,
 )
 from services.action_execution_service import (
+    ActionExecutionAttemptNotFoundError,
     ActionExecutionNotApprovedError,
     ActionExecutionNotFoundError,
     ActionExecutionQueryService,
@@ -544,6 +546,27 @@ def get_action_proposal_execution(
     except ActionExecutionNotFoundError as error:
         raise _proposal_error(
             status.HTTP_404_NOT_FOUND, "action_execution_not_found", error
+        )
+
+
+@router.get(
+    "/action-executions/{execution_id}/attempt",
+    response_model=ActionExecutionAttemptRead,
+)
+def get_action_execution_canonical_attempt(
+    execution_id: int,
+    session: DatabaseSession,
+) -> ActionExecutionAttemptRead:
+    repository = ActionExecutionRepository(session)
+    try:
+        return ActionExecutionQueryService(repository).get_canonical_attempt(execution_id)
+    except ActionExecutionNotFoundError as error:
+        raise _proposal_error(
+            status.HTTP_404_NOT_FOUND, "action_execution_not_found", error
+        )
+    except ActionExecutionAttemptNotFoundError as error:
+        raise _proposal_error(
+            status.HTTP_404_NOT_FOUND, "execution_attempt_not_found", error
         )
 
 

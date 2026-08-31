@@ -1,5 +1,6 @@
 from db.models import ActionExecutionRecord, ActionProposalRecord
 from domain.action_execution import (
+    ActionExecutionAttemptRead,
     ActionExecutionRead,
     FailureCause,
     OutcomeCertainty,
@@ -17,6 +18,10 @@ class ActionExecutionNotFoundError(LookupError):
 
 
 class ActionExecutionNotApprovedError(RuntimeError):
+    pass
+
+
+class ActionExecutionAttemptNotFoundError(LookupError):
     pass
 
 
@@ -42,6 +47,18 @@ class ActionExecutionQueryService:
                 f"Action execution for proposal {proposal_id} not found"
             )
         return ActionExecutionRead.model_validate(execution)
+
+    def get_canonical_attempt(self, execution_id: int) -> ActionExecutionAttemptRead:
+        if self._repository.get_by_id(execution_id) is None:
+            raise ActionExecutionNotFoundError(
+                f"Action execution {execution_id} not found"
+            )
+        attempt = self._repository.get_canonical_attempt(execution_id)
+        if attempt is None:
+            raise ActionExecutionAttemptNotFoundError(
+                f"Canonical attempt for execution {execution_id} not found"
+            )
+        return ActionExecutionAttemptRead.model_validate(attempt)
 
 
 class ActionExecutionService:

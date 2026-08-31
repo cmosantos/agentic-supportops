@@ -88,6 +88,38 @@ type ActionExecution = {
     };
   } | null;
   error: { code: string; message: string } | null;
+  completion_basis?: "acknowledged_result" | "reconciliation" | "legacy_recorded" | null;
+};
+type ActionExecutionAttempt = {
+  id: number;
+  execution_id: number;
+  attempt_number: number;
+  status: "running" | "completed" | "failed" | "outcome_unknown";
+  claimed_at: string;
+  invocation_started_at: string | null;
+  completed_at: string | null;
+  failure_cause: string | null;
+  outcome_certainty: "applied_acknowledged" | "not_applied" | "unknown" | "legacy_undetermined" | null;
+};
+type ReconciliationStatus =
+  | "running"
+  | "desired_state_observed"
+  | "undesired_state_observed"
+  | "inconclusive";
+type ActionExecutionReconciliation = {
+  id: number;
+  attempt_id: number;
+  execution_id: number;
+  status: ReconciliationStatus;
+  expected_outcome: { state?: string };
+  observed_outcome: { state?: string } | null;
+  error: { code: string; message: string } | null;
+  requested_at: string;
+  started_at: string;
+  completed_at: string | null;
+  is_stale?: boolean;
+  recoverable?: boolean;
+  recovery_block_reason?: string | null;
 };
 type OutcomeVerification = {
   id: number;
@@ -144,6 +176,7 @@ type AIExecution = {
 type InvestigationMode = "deterministic" | "ai";
 type AIMetadata = { status: AIStatus; model: string };
 type ExecutionLookupStatus = "idle" | "loading" | "not_found" | "found" | "error";
+type ReconciliationLookupStatus = "idle" | "loading" | "not_found" | "found" | "error";
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
 
@@ -173,6 +206,16 @@ function displayStatus(status: string): string {
   return status.replaceAll("_", " ");
 }
 
+function isReconciliationEligible(attempt: ActionExecutionAttempt | null): boolean {
+  return Boolean(
+    attempt &&
+    attempt.attempt_number === 1 &&
+    attempt.status === "outcome_unknown" &&
+    attempt.invocation_started_at &&
+    attempt.outcome_certainty === "unknown"
+  );
+}
+
 export function App() {
   const [health, setHealth] = useState<Health | null>(null);
   const [unavailable, setUnavailable] = useState(false);
@@ -192,6 +235,10 @@ export function App() {
   const [actionExecution, setActionExecution] = useState<ActionExecution | null>(null);
   const [executionLookupStatus, setExecutionLookupStatus] = useState<ExecutionLookupStatus>("idle");
   const [executingAction, setExecutingAction] = useState(false);
+  const [actionExecutionAttempt, setActionExecutionAttempt] = useState<ActionExecutionAttempt | null>(null);
+  const [reconciliation, setReconciliation] = useState<ActionExecutionReconciliation | null>(null);
+  const [reconciliationLookupStatus, setReconciliationLookupStatus] = useState<ReconciliationLookupStatus>("idle");
+  const [reconciling, setReconciling] = useState(false);
   const [outcomeVerification, setOutcomeVerification] = useState<OutcomeVerification | null>(null);
   const [verifyingOutcome, setVerifyingOutcome] = useState(false);
   const [resolutionDecisions, setResolutionDecisions] = useState<IncidentResolutionDecision[]>([]);
@@ -201,6 +248,54 @@ export function App() {
   const investigationVersion = useRef(0);
   const proposalDecisionInFlight = useRef(false);
   const executionRequestInFlight = useRef(false);
+  const reconciliationRequestInFlight = useRef(false);
+
+  async function loadReconciliationContext(
+    execution: ActionExecution,
+    signal?: AbortSignal,
+    requestVersion?: number,
+  ) {
+    const isCurrent = () => requestVersion === undefined || requestVersion === investigationVersion.current;
+    setActionExecutionAttempt(null);
+    setReconciliation(null);
+    setReconciliationLookupStatus("idle");
+    if (
+      execution.status !== "outcome_unknown" &&
+      execution.completion_basis !== "reconciliation"
+    ) return;
+    setReconciliationLookupStatus("loading");
+    try {
+      const attemptResponse = await fetch(`${apiBaseUrl}/action-executions/${execution.id}/attempt`, { signal });
+      if (!isCurrent()) return;
+      if (!attemptResponse.ok) {
+        setReconciliationLookupStatus("error");
+        setProposalError(await investigationErrorMessage(attemptResponse));
+        return;
+      }
+      const attempt: ActionExecutionAttempt = await attemptResponse.json();
+      setActionExecutionAttempt(attempt);
+      const reconciliationResponse = await fetch(
+        `${apiBaseUrl}/action-executions/${execution.id}/attempts/${attempt.id}/reconciliation`,
+        { signal },
+      );
+      if (!isCurrent()) return;
+      if (reconciliationResponse.status === 404) {
+        setReconciliationLookupStatus("not_found");
+        return;
+      }
+      if (!reconciliationResponse.ok) {
+        setReconciliationLookupStatus("error");
+        setProposalError(await investigationErrorMessage(reconciliationResponse));
+        return;
+      }
+      setReconciliation(await reconciliationResponse.json());
+      setReconciliationLookupStatus("found");
+    } catch {
+      if (signal?.aborted || !isCurrent()) return;
+      setReconciliationLookupStatus("error");
+      setProposalError("Unable to load persisted reconciliation state.");
+    }
+  }
 
   useEffect(() => {
     const controller = new AbortController();
@@ -261,6 +356,10 @@ export function App() {
     setActionExecution(null);
     setExecutionLookupStatus("idle");
     setExecutingAction(false);
+    setActionExecutionAttempt(null);
+    setReconciliation(null);
+    setReconciliationLookupStatus("idle");
+    setReconciling(false);
     setOutcomeVerification(null);
     setVerifyingOutcome(false);
     setResolutionDecisions([]);
@@ -298,6 +397,10 @@ export function App() {
     setActionExecution(null);
     setExecutionLookupStatus("idle");
     setExecutingAction(false);
+    setActionExecutionAttempt(null);
+    setReconciliation(null);
+    setReconciliationLookupStatus("idle");
+    setReconciling(false);
     setOutcomeVerification(null);
     setVerifyingOutcome(false);
     setResolutionDecisions([]);
@@ -323,8 +426,10 @@ export function App() {
           setProposalError(await investigationErrorMessage(executionResponse));
           return;
         }
-        setActionExecution(await executionResponse.json());
+        const execution: ActionExecution = await executionResponse.json();
+        setActionExecution(execution);
         setExecutionLookupStatus("found");
+        await loadReconciliationContext(execution, controller.signal, requestVersion);
       } catch (error: unknown) {
         if (controller.signal.aborted || requestVersion !== investigationVersion.current) return;
         setExecutionLookupStatus("error");
@@ -439,6 +544,7 @@ export function App() {
       const execution: ActionExecution = await response.json();
       setActionExecution(execution);
       setExecutionLookupStatus("found");
+      await loadReconciliationContext(execution);
       if (execution.status === "completed") {
         try {
           const verificationResponse = await fetch(
@@ -456,6 +562,39 @@ export function App() {
     } finally {
       executionRequestInFlight.current = false;
       setExecutingAction(false);
+    }
+  }
+
+  async function reconcileExecution() {
+    if (
+      !selected ||
+      !actionProposal ||
+      !actionExecution ||
+      !actionExecutionAttempt ||
+      reconciliationRequestInFlight.current
+    ) return;
+    reconciliationRequestInFlight.current = true;
+    setReconciling(true);
+    setProposalError(null);
+    const reference = selected.catalog_id ?? selected.id;
+    try {
+      const response = await fetch(
+        `${apiBaseUrl}/action-executions/${actionExecution.id}/attempts/${actionExecutionAttempt.id}/reconcile`,
+        { method: "POST" },
+      );
+      if (!response.ok) throw new Error(await investigationErrorMessage(response));
+      setReconciliation(await response.json());
+      setReconciliationLookupStatus("found");
+      const executionResponse = await fetch(
+        `${apiBaseUrl}/incidents/${reference}/investigation-runs/${actionProposal.investigation_id}/action-proposals/${actionProposal.id}/execution`,
+      );
+      if (!executionResponse.ok) throw new Error(await investigationErrorMessage(executionResponse));
+      setActionExecution(await executionResponse.json());
+    } catch (error: unknown) {
+      setProposalError(error instanceof Error ? error.message : "Reconciliation failed");
+    } finally {
+      reconciliationRequestInFlight.current = false;
+      setReconciling(false);
     }
   }
 
@@ -701,6 +840,61 @@ export function App() {
                           <p className="error">
                             Execution outcome is unknown. The action will not be retried automatically; reconciliation is required before any further mutation.
                           </p>
+                        )}
+                      </section>
+                    )}
+                    {actionExecution?.status === "outcome_unknown" && reconciliationLookupStatus === "loading" && (
+                      <p role="status">Checking reconciliation state…</p>
+                    )}
+                    {actionExecution?.status === "outcome_unknown" &&
+                      reconciliationLookupStatus === "not_found" &&
+                      isReconciliationEligible(actionExecutionAttempt) && (
+                        <section className="result-section" aria-label="Reconciliation control">
+                          <p className="human-control">
+                            Reconciliation performs a read-only observation of current state. It never retries the original mutation.
+                          </p>
+                          <div className="actions" aria-busy={reconciling}>
+                            <button disabled={reconciling} onClick={reconcileExecution}>
+                              {reconciling ? "Reconciling state…" : "Reconcile state"}
+                            </button>
+                          </div>
+                        </section>
+                      )}
+                    {reconciliation && (
+                      <section className="result-section" aria-label="Reconciliation result">
+                        <h4>Reconciliation</h4>
+                        <p><b>Reconciliation status:</b> {displayStatus(reconciliation.status).toUpperCase()}</p>
+                        {reconciliation.expected_outcome.state && (
+                          <p><b>Expected state:</b> {reconciliation.expected_outcome.state.toUpperCase()}</p>
+                        )}
+                        {reconciliation.observed_outcome?.state && (
+                          <p><b>Observed state:</b> {reconciliation.observed_outcome.state.toUpperCase()}</p>
+                        )}
+                        {reconciliation.status === "desired_state_observed" && (
+                          <p className="human-control">
+                            The desired technical state is currently observed. This does not prove that the original invocation succeeded.
+                          </p>
+                        )}
+                        {reconciliation.status === "undesired_state_observed" && (
+                          <p className="human-control">
+                            The desired state is not currently observed. This does not prove that the original mutation did not occur.
+                          </p>
+                        )}
+                        {reconciliation.status === "inconclusive" && (
+                          <p className="human-control">
+                            A reliable conclusion could not be obtained. The execution remains outcome unknown.
+                          </p>
+                        )}
+                        {reconciliation.status === "running" && !reconciliation.is_stale && (
+                          <p className="human-control">A reconciliation exists and is still non-terminal.</p>
+                        )}
+                        {reconciliation.status === "running" && reconciliation.is_stale && (
+                          <p className="human-control">
+                            This reconciliation appears stale. Explicit recovery is available as a separate operation and is not started here.
+                          </p>
+                        )}
+                        {reconciliation.status === "inconclusive" && reconciliation.error && (
+                          <p className="error">{reconciliation.error.message}</p>
                         )}
                       </section>
                     )}
