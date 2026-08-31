@@ -75,11 +75,18 @@ type ActionExecution = {
   proposal_id: number;
   incident_id: number;
   capability_name: string;
-  status: "running" | "completed" | "failed";
+  status: "running" | "completed" | "failed" | "outcome_unknown";
   requested_at: string;
   started_at: string;
   completed_at: string | null;
-  result: { data?: Record<string, unknown> } | null;
+  result: {
+    data?: {
+      target?: string;
+      previous_state?: string;
+      current_state?: string;
+      restarted?: boolean;
+    };
+  } | null;
   error: { code: string; message: string } | null;
 };
 type OutcomeVerification = {
@@ -191,6 +198,7 @@ export function App() {
   const investigationRequest = useRef<AbortController | null>(null);
   const investigationVersion = useRef(0);
   const proposalDecisionInFlight = useRef(false);
+  const executionRequestInFlight = useRef(false);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -388,7 +396,8 @@ export function App() {
   }
 
   async function executeApprovedAction() {
-    if (!selected || !actionProposal || executingAction || actionExecution) return;
+    if (!selected || !actionProposal || executionRequestInFlight.current || actionExecution) return;
+    executionRequestInFlight.current = true;
     setExecutingAction(true);
     setProposalError(null);
     const reference = selected.catalog_id ?? selected.id;
@@ -415,6 +424,7 @@ export function App() {
     } catch (error: unknown) {
       setProposalError(error instanceof Error ? error.message : "Action execution failed");
     } finally {
+      executionRequestInFlight.current = false;
       setExecutingAction(false);
     }
   }
@@ -604,6 +614,9 @@ export function App() {
                     <p><b>Risk level:</b> {actionProposal.risk_level}</p>
                     <p><b>Supporting evidence:</b> {actionProposal.supporting_evidence_ids.map((id) => `#${id}`).join(", ")}</p>
                     <p><b>Approval state:</b> {displayStatus(actionProposal.approval_status)}</p>
+                    {actionProposal.approval_status === "rejected" && (
+                      <p className="human-control">Proposal rejected. No action can be executed.</p>
+                    )}
                     {actionProposal.approval_status === "pending" && (
                       <div className="actions" aria-busy={decidingProposal}>
                         <button disabled={decidingProposal} onClick={() => decideActionProposal("approve")}>
@@ -615,21 +628,42 @@ export function App() {
                     {actionProposal.approval_status === "approved" &&
                       actionProposal.action_type === "restart_simulated_service" &&
                       !actionExecution && (
-                        <div className="actions" aria-busy={executingAction}>
-                          <button disabled={executingAction} onClick={executeApprovedAction}>
-                            {executingAction ? "Executing…" : "Execute approved action"}
-                          </button>
-                        </div>
+                        <section className="result-section" aria-label="Approved action execution">
+                          <p className="human-control">Approved, awaiting explicit operator execution.</p>
+                          <div className="actions" aria-busy={executingAction}>
+                            <button disabled={executingAction} onClick={executeApprovedAction}>
+                              {executingAction ? "Execution requested…" : "Execute approved action"}
+                            </button>
+                          </div>
+                        </section>
                       )}
                     {actionExecution && (
                       <section className="result-section" aria-label="Execution result">
                         <p><b>Capability:</b> {displayStatus(actionExecution.capability_name)}</p>
-                        <p><b>Execution status:</b> {actionExecution.status.toUpperCase()}</p>
-                        {actionExecution.result?.data && (
-                          <pre>{JSON.stringify(actionExecution.result.data, null, 2)}</pre>
+                        <p><b>Execution status:</b> {displayStatus(actionExecution.status).toUpperCase()}</p>
+                        {actionExecution.status === "running" && (
+                          <p className="human-control">Execution is in progress. No additional request will be sent.</p>
                         )}
-                        {actionExecution.error && (
+                        {actionExecution.result?.data && (
+                          <dl>
+                            {actionExecution.result.data.target && (
+                              <><dt>Target</dt><dd>{actionExecution.result.data.target}</dd></>
+                            )}
+                            {actionExecution.result.data.previous_state && (
+                              <><dt>Previous state</dt><dd>{actionExecution.result.data.previous_state}</dd></>
+                            )}
+                            {actionExecution.result.data.current_state && (
+                              <><dt>Current state</dt><dd>{actionExecution.result.data.current_state}</dd></>
+                            )}
+                          </dl>
+                        )}
+                        {actionExecution.status === "failed" && actionExecution.error && (
                           <p className="error">{actionExecution.error.message}</p>
+                        )}
+                        {actionExecution.status === "outcome_unknown" && (
+                          <p className="error">
+                            Execution outcome is unknown. The action will not be retried automatically; reconciliation is required before any further mutation.
+                          </p>
                         )}
                       </section>
                     )}

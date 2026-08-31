@@ -492,17 +492,144 @@ describe("Agentic SupportOps operator workflow", () => {
     expect(screen.queryByRole("button", { name: /execute approved/i })).not.toBeInTheDocument();
     await userEvent.click(await screen.findByRole("button", { name: "Approve" }));
     await userEvent.click(await screen.findByRole("button", { name: "Execute approved action" }));
-    expect(screen.getByRole("button", { name: "Executing…" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Execution requested…" })).toBeDisabled();
     expect(screen.queryByRole("button", { name: "Verify outcome" })).not.toBeInTheDocument();
 
     resolveExecution(jsonResponse(completedExecution));
     expect((await screen.findByText("Execution status:")).closest("p")).toHaveTextContent("COMPLETED");
-    expect(screen.getByText(/"current_state": "healthy"/)).toBeVisible();
+    expect(screen.getByText("Current state").nextElementSibling).toHaveTextContent("healthy");
     expect(screen.queryByRole("button", { name: /execute/i })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Verify outcome" })).toBeVisible();
     const executeCalls = fetchMock.mock.calls.filter(([url]) => String(url).endsWith("/execute"));
     expect(executeCalls).toHaveLength(1);
     expect(executeCalls[0][1]).toEqual({ method: "POST" });
+  });
+
+  it("does not execute automatically after approval", async () => {
+    const fetchMock = installFetch({
+      aiConfigured: true,
+      post: async (url) => {
+        if (url.endsWith("/investigate-ai")) return jsonResponse(actionableExecution);
+        if (url.endsWith("/action-proposals")) return jsonResponse(executableProposal, 201);
+        if (url.endsWith("/approve")) return jsonResponse({ ...executableProposal, approval_status: "approved" });
+        throw new Error(`Unexpected request: ${url}`);
+      },
+    });
+    render(<App />);
+    await selectIncident();
+    await userEvent.click(await screen.findByRole("button", { name: "Run AI investigation" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Approve" }));
+
+    expect(await screen.findByText("Approved, awaiting explicit operator execution.")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Execute approved action" })).toBeVisible();
+    expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith("/execute"))).toHaveLength(0);
+  });
+
+  it("submits only one explicit execution request while it is in flight", async () => {
+    let resolveExecution!: (response: Response) => void;
+    const executionRequest = new Promise<Response>((resolve) => { resolveExecution = resolve; });
+    const fetchMock = installFetch({
+      aiConfigured: true,
+      post: async (url) => {
+        if (url.endsWith("/investigate-ai")) return jsonResponse(actionableExecution);
+        if (url.endsWith("/action-proposals")) return jsonResponse(executableProposal, 201);
+        if (url.endsWith("/approve")) return jsonResponse({ ...executableProposal, approval_status: "approved" });
+        if (url.endsWith("/execute")) return executionRequest;
+        throw new Error(`Unexpected request: ${url}`);
+      },
+    });
+    render(<App />);
+    await selectIncident();
+    await userEvent.click(await screen.findByRole("button", { name: "Run AI investigation" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Approve" }));
+    const execute = await screen.findByRole("button", { name: "Execute approved action" });
+    execute.click();
+    execute.click();
+
+    expect(await screen.findByRole("button", { name: "Execution requested…" })).toBeDisabled();
+    expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith("/execute"))).toHaveLength(1);
+    resolveExecution(jsonResponse(completedExecution));
+    await screen.findByText("Execution status:");
+  });
+
+  it("renders OUTCOME_UNKNOWN distinctly without retry or verification controls", async () => {
+    installFetch({
+      aiConfigured: true,
+      post: async (url) => {
+        if (url.endsWith("/investigate-ai")) return jsonResponse(actionableExecution);
+        if (url.endsWith("/action-proposals")) return jsonResponse(executableProposal, 201);
+        if (url.endsWith("/approve")) return jsonResponse({ ...executableProposal, approval_status: "approved" });
+        if (url.endsWith("/execute")) return jsonResponse({
+          ...completedExecution,
+          status: "outcome_unknown",
+          completed_at: null,
+          result: null,
+          error: { code: "capability_timeout", message: "Controlled capability timed out with an unknown outcome" },
+        });
+        throw new Error(`Unexpected request: ${url}`);
+      },
+    });
+    render(<App />);
+    await selectIncident();
+    await userEvent.click(await screen.findByRole("button", { name: "Run AI investigation" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Approve" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Execute approved action" }));
+
+    expect((await screen.findByText("Execution status:")).closest("p")).toHaveTextContent("OUTCOME UNKNOWN");
+    expect(screen.getByText(/will not be retried automatically/i)).toBeVisible();
+    expect(screen.queryByRole("button", { name: /retry|execute approved|verify outcome/i })).not.toBeInTheDocument();
+  });
+
+  it("renders a canonical RUNNING execution without sending another request", async () => {
+    const fetchMock = installFetch({
+      aiConfigured: true,
+      post: async (url) => {
+        if (url.endsWith("/investigate-ai")) return jsonResponse(actionableExecution);
+        if (url.endsWith("/action-proposals")) return jsonResponse(executableProposal, 201);
+        if (url.endsWith("/approve")) return jsonResponse({ ...executableProposal, approval_status: "approved" });
+        if (url.endsWith("/execute")) return jsonResponse({
+          ...completedExecution,
+          status: "running",
+          completed_at: null,
+          result: null,
+        });
+        throw new Error(`Unexpected request: ${url}`);
+      },
+    });
+    render(<App />);
+    await selectIncident();
+    await userEvent.click(await screen.findByRole("button", { name: "Run AI investigation" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Approve" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Execute approved action" }));
+
+    expect((await screen.findByText("Execution status:")).closest("p")).toHaveTextContent("RUNNING");
+    expect(screen.getByText(/execution is in progress/i)).toBeVisible();
+    expect(screen.queryByRole("button", { name: /execute approved/i })).not.toBeInTheDocument();
+    expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith("/execute"))).toHaveLength(1);
+  });
+
+  it("shows an execution API error without inventing execution state", async () => {
+    installFetch({
+      aiConfigured: true,
+      post: async (url) => {
+        if (url.endsWith("/investigate-ai")) return jsonResponse(actionableExecution);
+        if (url.endsWith("/action-proposals")) return jsonResponse(executableProposal, 201);
+        if (url.endsWith("/approve")) return jsonResponse({ ...executableProposal, approval_status: "approved" });
+        if (url.endsWith("/execute")) {
+          return jsonResponse({ detail: { code: "execution_policy_denied", message: "Execution is not eligible" } }, 403);
+        }
+        throw new Error(`Unexpected request: ${url}`);
+      },
+    });
+    render(<App />);
+    await selectIncident();
+    await userEvent.click(await screen.findByRole("button", { name: "Run AI investigation" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Approve" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Execute approved action" }));
+
+    expect(await screen.findByText("Execution is not eligible")).toBeVisible();
+    expect(screen.queryByText("Execution status:")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Execute approved action" })).toBeEnabled();
   });
 
   it("renders a controlled FAILED execution and its safe error", async () => {
