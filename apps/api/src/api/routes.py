@@ -58,6 +58,7 @@ from services.action_proposal_service import (
 from services.action_execution_service import (
     ActionExecutionNotApprovedError,
     ActionExecutionNotFoundError,
+    ActionExecutionQueryService,
     ActionExecutionService,
 )
 from services.action_execution_recovery_service import (
@@ -520,6 +521,29 @@ def execute_action_proposal(
     except ExecutionPolicyDeniedError as error:
         raise _proposal_error(
             status.HTTP_403_FORBIDDEN, "execution_policy_denied", error
+        )
+
+
+@router.get(
+    "/incidents/{incident_id}/investigation-runs/{investigation_id}/action-proposals/{proposal_id}/execution",
+    response_model=ActionExecutionRead,
+)
+def get_action_proposal_execution(
+    incident_id: str,
+    investigation_id: int,
+    proposal_id: int,
+    session: DatabaseSession,
+) -> ActionExecutionRead:
+    investigation = _investigation_or_404(incident_id, investigation_id, session)
+    try:
+        return ActionExecutionQueryService(
+            ActionExecutionRepository(session)
+        ).get_for_proposal(
+            investigation.incident_id, investigation.id, proposal_id
+        )
+    except ActionExecutionNotFoundError as error:
+        raise _proposal_error(
+            status.HTTP_404_NOT_FOUND, "action_execution_not_found", error
         )
 
 

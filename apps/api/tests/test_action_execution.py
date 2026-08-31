@@ -66,6 +66,10 @@ def execute_url(investigation_id: int, proposal_id: int) -> str:
     return f"{proposal_url(investigation_id)}/{proposal_id}/execute"
 
 
+def execution_lookup_url(investigation_id: int, proposal_id: int) -> str:
+    return f"{proposal_url(investigation_id)}/{proposal_id}/execution"
+
+
 @pytest.fixture
 def execution_context(
     tmp_path, monkeypatch: pytest.MonkeyPatch
@@ -144,6 +148,98 @@ def test_pending_and_rejected_proposals_cannot_execute(seeded_client: TestClient
     assert pending_response.status_code == 409
     assert rejected_response.status_code == 409
     assert pending_response.json()["detail"]["code"] == "proposal_not_approved"
+
+
+def test_execution_lookup_returns_canonical_execution(
+    execution_context,
+) -> None:
+    client, _, _ = execution_context
+    investigation_id, proposal_id = approved_execution(client)
+    executed = client.post(execute_url(investigation_id, proposal_id))
+
+    response = client.get(execution_lookup_url(investigation_id, proposal_id))
+
+    assert response.status_code == 200, response.text
+    assert response.json() == executed.json()
+
+
+def test_execution_lookup_without_execution_is_controlled_404(
+    execution_context,
+) -> None:
+    client, _, _ = execution_context
+    investigation_id, proposal_id = approved_execution(client)
+
+    response = client.get(execution_lookup_url(investigation_id, proposal_id))
+
+    assert response.status_code == 404
+    assert response.json()["detail"]["code"] == "action_execution_not_found"
+
+
+@pytest.mark.parametrize(
+    ("incident_id", "investigation_offset", "proposal_offset"),
+    [
+        ("INC-001", 0, 0),
+        ("INC-023", 1000, 0),
+        ("INC-023", 0, 1000),
+    ],
+)
+def test_execution_lookup_rejects_wrong_ownership_chain(
+    execution_context,
+    incident_id: str,
+    investigation_offset: int,
+    proposal_offset: int,
+) -> None:
+    client, _, _ = execution_context
+    investigation_id, proposal_id = approved_execution(client)
+    url = (
+        f"/incidents/{incident_id}/investigation-runs/"
+        f"{investigation_id + investigation_offset}/action-proposals/"
+        f"{proposal_id + proposal_offset}/execution"
+    )
+
+    response = client.get(url)
+
+    assert response.status_code == 404
+
+
+def test_repeated_execution_lookups_are_side_effect_free(
+    execution_context, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, sessions, _ = execution_context
+    investigation_id, proposal_id = approved_execution(client)
+    calls = 0
+    original = ActionTools.restart_simulated_service
+
+    def counted(self, target, service_name):
+        nonlocal calls
+        calls += 1
+        return original(self, target, service_name)
+
+    monkeypatch.setattr(ActionTools, "restart_simulated_service", counted)
+    executed = client.post(execute_url(investigation_id, proposal_id))
+    execution_before, attempts_before, events_before = persisted_execution_state(sessions)
+    snapshots_before = (
+        execution_before.status,
+        execution_before.started_at,
+        execution_before.completed_at,
+        [(item.id, item.status, item.completed_at) for item in attempts_before],
+        [(item.id, item.sequence, item.event_type) for item in events_before],
+    )
+
+    first = client.get(execution_lookup_url(investigation_id, proposal_id))
+    second = client.get(execution_lookup_url(investigation_id, proposal_id))
+    execution_after, attempts_after, events_after = persisted_execution_state(sessions)
+    snapshots_after = (
+        execution_after.status,
+        execution_after.started_at,
+        execution_after.completed_at,
+        [(item.id, item.status, item.completed_at) for item in attempts_after],
+        [(item.id, item.sequence, item.event_type) for item in events_after],
+    )
+
+    assert first.json() == second.json() == executed.json()
+    assert calls == 1
+    assert snapshots_after == snapshots_before
 
 
 def test_approved_proposal_executes_persisted_action_once_and_is_audited(

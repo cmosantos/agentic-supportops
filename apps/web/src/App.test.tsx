@@ -101,6 +101,12 @@ const executableProposal = {
   parameters: { service_name: "SupportApi" },
 };
 
+const approvedExecutableProposal = {
+  ...executableProposal,
+  approval_status: "approved",
+  decision_at: "2026-08-28T12:13:00Z",
+};
+
 const completedExecution = {
   id: 50,
   proposal_id: 40,
@@ -163,6 +169,7 @@ function installFetch(options?: {
   coreFailure?: boolean;
   aiConfigured?: boolean;
   incidentsOverride?: readonly unknown[];
+  execution?: (url: string, init?: RequestInit) => Promise<Response>;
   proposals?: (url: string, init?: RequestInit) => Promise<Response>;
   resolution?: (url: string, init?: RequestInit) => Promise<Response>;
   post?: (url: string, init?: RequestInit) => Promise<Response>;
@@ -183,6 +190,11 @@ function installFetch(options?: {
     }
     if (url.endsWith("/action-proposals") && (!init?.method || init.method === "GET")) {
       return options?.proposals ? options.proposals(url, init) : jsonResponse([]);
+    }
+    if (url.endsWith("/execution") && (!init?.method || init.method === "GET")) {
+      return options?.execution
+        ? options.execution(url, init)
+        : jsonResponse({ detail: { code: "action_execution_not_found", message: "Action execution not found" } }, 404);
     }
     if (options?.post) return options.post(url, init);
     throw new Error(`Unexpected request: ${url}`);
@@ -606,6 +618,120 @@ describe("Agentic SupportOps operator workflow", () => {
     expect(screen.getByText(/execution is in progress/i)).toBeVisible();
     expect(screen.queryByRole("button", { name: /execute approved/i })).not.toBeInTheDocument();
     expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith("/execute"))).toHaveLength(1);
+  });
+
+  it("shows Execute when persisted lookup confirms an approved proposal has no execution", async () => {
+    const fetchMock = installFetch({
+      aiConfigured: true,
+      proposals: async () => jsonResponse([approvedExecutableProposal]),
+      execution: async () => jsonResponse(
+        { detail: { code: "action_execution_not_found", message: "Action execution not found" } },
+        404,
+      ),
+      post: async (url) => {
+        if (url.endsWith("/investigate-ai")) return jsonResponse(actionableExecution);
+        throw new Error(`Unexpected request: ${url}`);
+      },
+    });
+    render(<App />);
+    await selectIncident();
+    await userEvent.click(await screen.findByRole("button", { name: "Run AI investigation" }));
+
+    expect(await screen.findByRole("button", { name: "Execute approved action" })).toBeVisible();
+    expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith("/execution"))).toHaveLength(1);
+    expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith("/execute"))).toHaveLength(0);
+  });
+
+  it("rehydrates a persisted COMPLETED execution without calling execute", async () => {
+    const fetchMock = installFetch({
+      aiConfigured: true,
+      proposals: async () => jsonResponse([approvedExecutableProposal]),
+      execution: async () => jsonResponse(completedExecution),
+      post: async (url) => {
+        if (url.endsWith("/investigate-ai")) return jsonResponse(actionableExecution);
+        throw new Error(`Unexpected request: ${url}`);
+      },
+    });
+    render(<App />);
+    await selectIncident();
+    await userEvent.click(await screen.findByRole("button", { name: "Run AI investigation" }));
+
+    expect((await screen.findByText("Execution status:")).closest("p")).toHaveTextContent("COMPLETED");
+    expect(screen.getByText("Current state").nextElementSibling).toHaveTextContent("healthy");
+    expect(screen.queryByRole("button", { name: "Execute approved action" })).not.toBeInTheDocument();
+    expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith("/execute"))).toHaveLength(0);
+  });
+
+  it("rehydrates a persisted FAILED execution", async () => {
+    installFetch({
+      aiConfigured: true,
+      proposals: async () => jsonResponse([approvedExecutableProposal]),
+      execution: async () => jsonResponse({
+        ...completedExecution,
+        status: "failed",
+        result: null,
+        error: { code: "application_not_found", message: "Application not found" },
+      }),
+      post: async (url) => {
+        if (url.endsWith("/investigate-ai")) return jsonResponse(actionableExecution);
+        throw new Error(`Unexpected request: ${url}`);
+      },
+    });
+    render(<App />);
+    await selectIncident();
+    await userEvent.click(await screen.findByRole("button", { name: "Run AI investigation" }));
+
+    expect((await screen.findByText("Execution status:")).closest("p")).toHaveTextContent("FAILED");
+    expect(screen.getByText("Application not found")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Execute approved action" })).not.toBeInTheDocument();
+  });
+
+  it("rehydrates persisted OUTCOME_UNKNOWN without retry control", async () => {
+    installFetch({
+      aiConfigured: true,
+      proposals: async () => jsonResponse([approvedExecutableProposal]),
+      execution: async () => jsonResponse({
+        ...completedExecution,
+        status: "outcome_unknown",
+        completed_at: null,
+        result: null,
+        error: { code: "capability_timeout", message: "Controlled capability timed out" },
+      }),
+      post: async (url) => {
+        if (url.endsWith("/investigate-ai")) return jsonResponse(actionableExecution);
+        throw new Error(`Unexpected request: ${url}`);
+      },
+    });
+    render(<App />);
+    await selectIncident();
+    await userEvent.click(await screen.findByRole("button", { name: "Run AI investigation" }));
+
+    expect((await screen.findByText("Execution status:")).closest("p")).toHaveTextContent("OUTCOME UNKNOWN");
+    expect(screen.getByText(/will not be retried automatically/i)).toBeVisible();
+    expect(screen.queryByRole("button", { name: /retry|execute approved/i })).not.toBeInTheDocument();
+  });
+
+  it("surfaces unexpected execution lookup failure and keeps Execute disabled", async () => {
+    installFetch({
+      aiConfigured: true,
+      proposals: async () => jsonResponse([approvedExecutableProposal]),
+      execution: async () => jsonResponse(
+        { detail: { code: "execution_lookup_failed", message: "Execution state is temporarily unavailable" } },
+        503,
+      ),
+      post: async (url) => {
+        if (url.endsWith("/investigate-ai")) return jsonResponse(actionableExecution);
+        throw new Error(`Unexpected request: ${url}`);
+      },
+    });
+    render(<App />);
+    await selectIncident();
+    await userEvent.click(await screen.findByRole("button", { name: "Run AI investigation" }));
+
+    expect(await screen.findByText("Execution state is temporarily unavailable")).toBeVisible();
+    expect(screen.getByText(/controls are unavailable until persisted state can be confirmed/i)).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Execute approved action" })).not.toBeInTheDocument();
+    expect(screen.queryByText("Execution status:")).not.toBeInTheDocument();
   });
 
   it("shows an execution API error without inventing execution state", async () => {

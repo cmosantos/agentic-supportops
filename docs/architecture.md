@@ -143,6 +143,8 @@ Persistence + Audit Events
 
 Human approval does not give the AI unrestricted tool access. It permits one attempt of one persisted proposal. `ExecutionPolicy` independently allows only `restart_simulated_service`; the endpoint accepts no replacement action data, and the executor combines the persisted proposal target with its persisted parameters. It does not call Responses API, Agents SDK, MCP, or any model to reinterpret the action.
 
+The nested `GET .../action-proposals/{proposal_id}/execution` path is a separate read boundary used to rediscover the canonical execution. It validates `incident -> investigation -> proposal -> execution`, returns `404` before execution exists, and never starts an attempt, invokes a capability, appends an event, changes timestamps or leases, verifies, reconciles, or retries.
+
 The capability operates entirely over the local Contoso application abstraction. For a known application/service it returns a deterministic transition such as `degraded -> healthy`; an unknown target produces a controlled failure. It invokes no shell, subprocess, Windows service manager, Docker, operating-system API, filesystem write, or external HTTP request.
 
 `action_executions.proposal_id` is unique. Creation in `RUNNING` state and the requested/started events commit together. Capability success or failure is recorded as `COMPLETED` or `FAILED`, and the matching terminal event commits in the same transaction. A repeated or concurrent request observes the existing row and cannot invoke the capability twice. Execution failure does not rewrite the historically separate `APPROVED` decision.

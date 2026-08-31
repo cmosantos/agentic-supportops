@@ -143,6 +143,7 @@ type AIExecution = {
 };
 type InvestigationMode = "deterministic" | "ai";
 type AIMetadata = { status: AIStatus; model: string };
+type ExecutionLookupStatus = "idle" | "loading" | "not_found" | "found" | "error";
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
 
@@ -189,6 +190,7 @@ export function App() {
   const [proposalError, setProposalError] = useState<string | null>(null);
   const [decidingProposal, setDecidingProposal] = useState(false);
   const [actionExecution, setActionExecution] = useState<ActionExecution | null>(null);
+  const [executionLookupStatus, setExecutionLookupStatus] = useState<ExecutionLookupStatus>("idle");
   const [executingAction, setExecutingAction] = useState(false);
   const [outcomeVerification, setOutcomeVerification] = useState<OutcomeVerification | null>(null);
   const [verifyingOutcome, setVerifyingOutcome] = useState(false);
@@ -257,6 +259,7 @@ export function App() {
     setActionProposal(null);
     setProposalError(null);
     setActionExecution(null);
+    setExecutionLookupStatus("idle");
     setExecutingAction(false);
     setOutcomeVerification(null);
     setVerifyingOutcome(false);
@@ -293,6 +296,7 @@ export function App() {
     setActionProposal(null);
     setProposalError(null);
     setActionExecution(null);
+    setExecutionLookupStatus("idle");
     setExecutingAction(false);
     setOutcomeVerification(null);
     setVerifyingOutcome(false);
@@ -300,6 +304,33 @@ export function App() {
     setResolutionReason("");
     setDecidingResolution(false);
     setMode(investigationMode);
+
+    async function loadProposalAndExecution(proposal: ActionProposal, reference: string | number) {
+      if (requestVersion !== investigationVersion.current) return;
+      setActionProposal(proposal);
+      setActionExecution(null);
+      setExecutionLookupStatus("loading");
+      const executionUrl = `${apiBaseUrl}/incidents/${reference}/investigation-runs/${proposal.investigation_id}/action-proposals/${proposal.id}/execution`;
+      try {
+        const executionResponse = await fetch(executionUrl, { signal: controller.signal });
+        if (requestVersion !== investigationVersion.current) return;
+        if (executionResponse.status === 404) {
+          setExecutionLookupStatus("not_found");
+          return;
+        }
+        if (!executionResponse.ok) {
+          setExecutionLookupStatus("error");
+          setProposalError(await investigationErrorMessage(executionResponse));
+          return;
+        }
+        setActionExecution(await executionResponse.json());
+        setExecutionLookupStatus("found");
+      } catch (error: unknown) {
+        if (controller.signal.aborted || requestVersion !== investigationVersion.current) return;
+        setExecutionLookupStatus("error");
+        setProposalError("Unable to load persisted execution state.");
+      }
+    }
 
     try {
       const reference = selected.catalog_id ?? selected.id;
@@ -331,9 +362,7 @@ export function App() {
           }
           const persistedProposals: ActionProposal[] = await persistedResponse.json();
           if (persistedProposals.length > 0) {
-            if (requestVersion === investigationVersion.current) {
-              setActionProposal(persistedProposals[0]);
-            }
+            await loadProposalAndExecution(persistedProposals[0], reference);
             return;
           }
           const proposalResponse = await fetch(proposalUrl, {
@@ -346,7 +375,7 @@ export function App() {
           if (!proposalResponse.ok) {
             setProposalError(await investigationErrorMessage(proposalResponse));
           } else if (requestVersion === investigationVersion.current) {
-            setActionProposal(await proposalResponse.json());
+            await loadProposalAndExecution(await proposalResponse.json(), reference);
           }
         }
       } else {
@@ -409,6 +438,7 @@ export function App() {
       if (!response.ok) throw new Error(await investigationErrorMessage(response));
       const execution: ActionExecution = await response.json();
       setActionExecution(execution);
+      setExecutionLookupStatus("found");
       if (execution.status === "completed") {
         try {
           const verificationResponse = await fetch(
@@ -627,6 +657,7 @@ export function App() {
                     )}
                     {actionProposal.approval_status === "approved" &&
                       actionProposal.action_type === "restart_simulated_service" &&
+                      executionLookupStatus === "not_found" &&
                       !actionExecution && (
                         <section className="result-section" aria-label="Approved action execution">
                           <p className="human-control">Approved, awaiting explicit operator execution.</p>
@@ -637,6 +668,12 @@ export function App() {
                           </div>
                         </section>
                       )}
+                    {actionProposal.approval_status === "approved" && executionLookupStatus === "loading" && (
+                      <p role="status">Checking persisted execution…</p>
+                    )}
+                    {actionProposal.approval_status === "approved" && executionLookupStatus === "error" && (
+                      <p className="human-control">Execution controls are unavailable until persisted state can be confirmed.</p>
+                    )}
                     {actionExecution && (
                       <section className="result-section" aria-label="Execution result">
                         <p><b>Capability:</b> {displayStatus(actionExecution.capability_name)}</p>

@@ -78,6 +78,23 @@ class ActionExecutionRepository:
             )
         )
 
+    def get_for_owned_proposal(
+        self, incident_id: int, investigation_id: int, proposal_id: int
+    ) -> ActionExecutionRecord | None:
+        return self._session.scalar(
+            select(ActionExecutionRecord)
+            .join(
+                ActionProposalRecord,
+                ActionProposalRecord.id == ActionExecutionRecord.proposal_id,
+            )
+            .where(
+                ActionExecutionRecord.proposal_id == proposal_id,
+                ActionExecutionRecord.incident_id == incident_id,
+                ActionProposalRecord.incident_id == incident_id,
+                ActionProposalRecord.investigation_id == investigation_id,
+            )
+        )
+
     def start(
         self, proposal: ActionProposalRecord, runtime: InvestigationRuntime
     ) -> tuple[

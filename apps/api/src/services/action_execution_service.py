@@ -20,6 +20,30 @@ class ActionExecutionNotApprovedError(RuntimeError):
     pass
 
 
+class ActionExecutionQueryService:
+    def __init__(self, repository: ActionExecutionRepository) -> None:
+        self._repository = repository
+
+    def get_for_proposal(
+        self, incident_id: int, investigation_id: int, proposal_id: int
+    ) -> ActionExecutionRead:
+        proposal = self._repository.get_proposal(
+            incident_id, investigation_id, proposal_id
+        )
+        if proposal is None:
+            raise ActionExecutionNotFoundError(
+                f"Action proposal {proposal_id} not found"
+            )
+        execution = self._repository.get_for_owned_proposal(
+            incident_id, investigation_id, proposal.id
+        )
+        if execution is None:
+            raise ActionExecutionNotFoundError(
+                f"Action execution for proposal {proposal_id} not found"
+            )
+        return ActionExecutionRead.model_validate(execution)
+
+
 class ActionExecutionService:
     def __init__(
         self,

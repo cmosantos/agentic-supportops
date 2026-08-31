@@ -82,6 +82,8 @@ AI Investigator -> Proposal -> Human Decision -> APPROVED only
 
 Human approval does not give the AI unrestricted tool access. `restart_simulated_service` is registered for controlled execution but excluded from investigation schemas and the MCP allowlist. The execute endpoint accepts no capability, target, or argument body: those values come from the persisted proposal. No model is called during execution.
 
+The adjacent execution lookup endpoint returns the canonical execution already associated with that proposal, or `404` when none exists. It validates the incident, investigation, and proposal ownership chain and performs no capability invocation, retry, event append, lease/timestamp update, verification, or reconciliation.
+
 SQLite enforces one `action_executions` row per proposal and one canonical physical attempt. The attempt records whether invocation started, its `failure_cause`, and its `outcome_certainty`. A known pre-mutation rejection is `NOT_APPLIED`; a timeout, acknowledgement loss, invalid result, or interruption after invocation is `UNKNOWN` and moves the execution to `OUTCOME_UNKNOWN`. Unknown mutation outcome is never automatically retried. The system reconciles by observing governed read-only state.
 
 ### Explicit recovery and reconciliation
@@ -311,6 +313,7 @@ FastAPI exposes the complete interactive contract at `/docs`.
 | Run history | `GET /incidents/{incident_id}/investigation-runs?runtime=manual_responses` |
 | Event history | `GET /incidents/{incident_id}/investigation-runs/{run_id}/events` |
 | Controlled execution | `POST /incidents/{incident_id}/investigation-runs/{run_id}/action-proposals/{proposal_id}/execute` |
+| Read proposal execution | `GET /incidents/{incident_id}/investigation-runs/{run_id}/action-proposals/{proposal_id}/execution` |
 | Assess stale attempt | `POST /action-executions/{execution_id}/attempts/{attempt_id}/stale-assessment` |
 | Reconcile unknown outcome | `POST /action-executions/{execution_id}/attempts/{attempt_id}/reconcile` |
 | Recover stale reconciliation | `POST /action-executions/{execution_id}/attempts/{attempt_id}/reconciliation/recover` |
