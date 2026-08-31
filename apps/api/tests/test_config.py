@@ -113,3 +113,36 @@ def test_stale_execution_assessment_threshold_must_be_positive(
         match="ACTION_EXECUTION_ATTEMPT_STALE_AFTER_SECONDS must be greater than zero",
     ):
         Settings()
+
+
+def test_stale_reconciliation_recovery_threshold_defaults_and_is_overridable(
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv(
+        "ACTION_EXECUTION_RECONCILIATION_STALE_AFTER_SECONDS", raising=False
+    )
+    assert Settings().action_execution_reconciliation_stale_after_seconds == 300
+
+    monkeypatch.setenv(
+        "ACTION_EXECUTION_RECONCILIATION_STALE_AFTER_SECONDS", "900"
+    )
+    assert Settings().action_execution_reconciliation_stale_after_seconds == 900
+
+
+@pytest.mark.parametrize("invalid_threshold", ["0", "-1"])
+def test_stale_reconciliation_recovery_threshold_must_be_positive(
+    monkeypatch, invalid_threshold: str
+) -> None:
+    monkeypatch.setenv(
+        "ACTION_EXECUTION_RECONCILIATION_STALE_AFTER_SECONDS",
+        invalid_threshold,
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "ACTION_EXECUTION_RECONCILIATION_STALE_AFTER_SECONDS must be "
+            "greater than zero"
+        ),
+    ):
+        Settings()

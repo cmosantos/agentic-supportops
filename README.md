@@ -82,7 +82,25 @@ AI Investigator -> Proposal -> Human Decision -> APPROVED only
 
 Human approval does not give the AI unrestricted tool access. `restart_simulated_service` is registered for controlled execution but excluded from investigation schemas and the MCP allowlist. The execute endpoint accepts no capability, target, or argument body: those values come from the persisted proposal. No model is called during execution.
 
-SQLite enforces one `action_executions` row per proposal. The first request records `execution_requested` and `execution_started`, invokes the bounded lab capability, then atomically persists `COMPLETED`/`FAILED` with its terminal event. Repeated requests return the existing execution and do not invoke the capability again.
+SQLite enforces one `action_executions` row per proposal and one canonical physical attempt. The attempt records whether invocation started, its `failure_cause`, and its `outcome_certainty`. A known pre-mutation rejection is `NOT_APPLIED`; a timeout, acknowledgement loss, invalid result, or interruption after invocation is `UNKNOWN` and moves the execution to `OUTCOME_UNKNOWN`. Unknown mutation outcome is never automatically retried. The system reconciles by observing governed read-only state.
+
+### Explicit recovery and reconciliation
+
+```text
+Proposal -> Human Approval -> Controlled Execution -> Physical Attempt
+    known result -------------------------------------> normal completion
+    unknown result -> OUTCOME_UNKNOWN -> Stale Assessment
+                   -> Explicit Reconciliation -> read-only observation
+                   -> desired | undesired | inconclusive
+```
+
+The canonical physical attempt is attempt #1. `invocation_started_at` separates interruption before invocation from interruption after mutation may have begun. `NOT_APPLIED` means there is sufficient evidence that mutation did not start. `UNKNOWN` means mutation may have occurred, so retry is unsafe. Stale assessment classifies interrupted attempts after the configured threshold; it never invokes the action.
+
+Each attempt has at most one canonical reconciliation. The server derives its read-only observer, target, and expected state from policy. `DESIRED_STATE_OBSERVED` may complete the execution with `completion_basis=RECONCILIATION`; `UNDESIRED_STATE_OBSERVED` does not prove `NOT_APPLIED`; `INCONCLUSIVE` is not ordinary failure. The physical attempt remains historically `OUTCOME_UNKNOWN / UNKNOWN`: the attempt says, 'We do not know the original invocation result,' while reconciliation says, 'We can observe the desired state now.'
+
+Recovery is explicit and only claims a canonical `RUNNING` reconciliation after `ACTION_EXECUTION_RECONCILIATION_STALE_AFTER_SECONDS`. A SQLite compare-and-set renews its lease before one new read-only observation. It creates neither an attempt nor another reconciliation. A crash before observation becomes recoverable after a later stale window; a crash after observation but before terminal persistence may cause a future recovery to observe again. This is safe because read retry is not mutation retry, and the application does not claim artificial exactly-once semantics.
+
+`GET /action-executions/{execution_id}/attempts/{attempt_id}/reconciliation` returns persisted reconciliation state plus derived `is_stale`, `recoverable`, and typed `recovery_block_reason`. It never observes, recovers, renews a lease, creates events, or changes state. The GET is advisory; the explicit recovery POST always revalidates eligibility.
 
 ## 🔎 Post-execution outcome verification
 
@@ -152,6 +170,8 @@ MCP is not the product API: HTTP endpoints serve the UI and application clients,
 - Database conflicts roll back before a structured HTTP `409` is returned.
 - The terminal event is flushed without committing; the corresponding run transition commits both or rolls both back.
 - Each proposal has at most one execution record; terminal execution state and terminal audit event commit together.
+- Each execution has one canonical physical attempt number 1, and each attempt has at most one canonical reconciliation.
+- Reconciliation terminal state, its audit event, and any execution completion via `RECONCILIATION` commit atomically.
 - Each completed execution has at most one outcome verification; terminal verification state and event commit together.
 - Each verification has at most one human resolution review; the final resolution decision, incident transition, and events commit together.
 - Latest APIs retain existing semantics. History APIs list runs newest-first and expose events by stable `investigation_id`.
@@ -271,7 +291,7 @@ Set-Location ..\..
 
 The committed [GitHub Actions workflow](.github/workflows/ci.yml) targets pull requests and pushes to `master`:
 
-- **Backend:** Python 3.12, uv lock check, frozen dev installation, dependency health, application import, full pytest (`98 passed`), and separately visible real MCP stdio parity (`15 passed`).
+- **Backend:** Python 3.12, uv lock check, frozen dev installation, dependency health, application import, the full pytest suite, and separately visible real MCP stdio parity.
 - **Frontend:** Node.js 24, `npm ci`, focused behavioral tests, TypeScript, and Vite production build.
 
 No OpenAI credential, external MCP server, persistent database, or production secret is required. The public repository is published on GitHub, and the workflow and underlying commands have been validated locally and successfully on a GitHub-hosted Ubuntu runner.
@@ -291,6 +311,10 @@ FastAPI exposes the complete interactive contract at `/docs`.
 | Run history | `GET /incidents/{incident_id}/investigation-runs?runtime=manual_responses` |
 | Event history | `GET /incidents/{incident_id}/investigation-runs/{run_id}/events` |
 | Controlled execution | `POST /incidents/{incident_id}/investigation-runs/{run_id}/action-proposals/{proposal_id}/execute` |
+| Assess stale attempt | `POST /action-executions/{execution_id}/attempts/{attempt_id}/stale-assessment` |
+| Reconcile unknown outcome | `POST /action-executions/{execution_id}/attempts/{attempt_id}/reconcile` |
+| Recover stale reconciliation | `POST /action-executions/{execution_id}/attempts/{attempt_id}/reconciliation/recover` |
+| Read reconciliation | `GET /action-executions/{execution_id}/attempts/{attempt_id}/reconciliation` |
 | Verify completed execution | `POST /action-executions/{execution_id}/verify` |
 | Read canonical verification | `GET /action-executions/{execution_id}/verification` |
 | Record human resolution review | `POST /incidents/{incident_id}/resolution-decisions` |
@@ -316,7 +340,6 @@ Not yet included:
 - PostgreSQL or production database operations;
 - external ticketing/infrastructure integrations;
 - hosted telemetry, deployment, or cloud infrastructure;
-- historical Evidence/Steps keyed by run ID;
 - frontend views for complete historical run/event APIs.
 
 See [Publication readiness](docs/publication-readiness.md) for the verified publication and validation baseline.

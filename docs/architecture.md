@@ -147,6 +147,38 @@ The capability operates entirely over the local Contoso application abstraction.
 
 `action_executions.proposal_id` is unique. Creation in `RUNNING` state and the requested/started events commit together. Capability success or failure is recorded as `COMPLETED` or `FAILED`, and the matching terminal event commits in the same transaction. A repeated or concurrent request observes the existing row and cannot invoke the capability twice. Execution failure does not rewrite the historically separate `APPROVED` decision.
 
+## Physical attempt and reconciliation boundary
+
+```text
+Investigation Plane
+        |
+Proposal / Human Decision
+        |
+Controlled Mutation Plane
+        |
+Physical Attempt Boundary
+        |
+Outcome Certainty
+        |
+Recovery / Reconciliation Plane
+        |
+Read-only Observation
+        |
+Verification
+        |
+Human Resolution
+```
+
+Controlled execution creates one canonical physical attempt number 1. The attempt records `invocation_started_at`, `failure_cause`, and `outcome_certainty`. `NOT_APPLIED` means there is sufficient evidence that mutation never started. `UNKNOWN` means it may have started, so both attempt and execution become `OUTCOME_UNKNOWN`; this is not ordinary failure and is never automatically retried. Stale assessment records that an uncertain attempt has exceeded its threshold but does not execute anything.
+
+An unknown attempt may have one canonical `ActionExecutionReconciliation`. The server-side `VerificationPolicy` supplies the read-only observer, target, and expected state; neither client nor model chooses them. `DESIRED_STATE_OBSERVED` may complete the execution with `completion_basis=RECONCILIATION`. `UNDESIRED_STATE_OBSERVED` does not prove `NOT_APPLIED`, and `INCONCLUSIVE` is not `FAILED`. In every case the physical attempt remains historically `OUTCOME_UNKNOWN / UNKNOWN`: the attempt says, 'We do not know the original invocation result,' while reconciliation says, 'We can observe the desired state now.' History is not rewritten.
+
+Recovery is an explicit POST for an existing canonical reconciliation that is both `RUNNING` and stale. A SQLite compare-and-set claim renews the persisted lease before one new read-only observation. Recovery creates neither attempt number 2 nor a second reconciliation and never repeats the mutation. A crash before observation can become recoverable after another stale window; a crash after observation but before terminal persistence can lead to a later observation. Repeating a read is safe, but the design does not claim exactly-once across crash boundaries.
+
+`GET /action-executions/{execution_id}/attempts/{attempt_id}/reconciliation` is a side-effect-free operational view. It derives `is_stale`, `recoverable`, and typed `recovery_block_reason` without observing, creating events, or renewing a lease. Its eligibility result is advisory; the recovery POST shares the same rule evaluator and revalidates persisted state before claiming work.
+
+Execution may produce an effect. Reconciliation only observes current state after an uncertain mutation. Verification independently validates outcome after an execution is completed, including completion by reconciliation. Human resolution decides whether the incident closes. Reconciliation does not replace verification, and verification does not resolve the incident.
+
 ## Post-execution verification boundary
 
 Successful execution is not proof of successful remediation. `ActionExecution(COMPLETED)` and `OutcomeVerification(VERIFIED)` are separate historical facts.
@@ -172,15 +204,16 @@ The observer performs a new read of the simulated application state; it never tr
 
 `outcome_verifications.execution_id` is unique. The initial record and requested/started events are committed together. Terminal state and its matching `verification_verified`, `verification_not_verified`, or `verification_failed` event share another transaction. Concurrent/repeated requests return the canonical record and never repeat observation.
 
-Verification does not rewrite the proposal, human decision, execution, or incident. In particular, **`VERIFIED` does not automatically mean `INCIDENT RESOLVED`**; incident resolution remains a future human-governed boundary.
+Verification does not rewrite the proposal, human decision, execution, or incident. In particular, **`VERIFIED` does not automatically mean `INCIDENT RESOLVED`**; the existing human resolution boundary requires a separate explicit decision.
 
-The three policies retain distinct trust contexts over one capability catalog:
+The policies retain distinct trust contexts over one capability catalog:
 
 | Policy | Authority |
 | --- | --- |
 | Investigation policy | Read-only capabilities an AI runtime may inspect. |
 | Execution policy | Mutable capability an approved proposal may invoke once. |
-| Verification policy | Deterministic read-only observer used to evaluate a completed execution. |
+| Reconciliation observation policy | Deterministic read-only observer used to inspect current state after an unknown attempt. |
+| Verification policy | The same governed mapping, used independently to evaluate a completed execution. |
 
 ## Human resolution boundary
 
@@ -209,12 +242,15 @@ flowchart TD
 
 The decision insert, incident transition, `resolution_reviewed`, and `incident_resolved` event share one transaction. `KEEP_OPEN` similarly commits its decision with `resolution_reviewed` and `incident_kept_open`. Resolution never mutates proposal approval, execution, or verification history and invokes no model, agent, MCP transport, tool, or remediation capability.
 
-The project now exposes three deliberate trust boundaries:
+The project exposes deliberate trust boundaries:
 
 | Boundary | Meaning |
 | --- | --- |
 | Investigation | AI may inspect only policy-approved read-only capabilities. |
 | Execution | A mutable capability requires a persisted proposal and explicit human approval. |
+| Physical attempt | Invocation start and outcome certainty are durable; unknown mutation is not retried. |
+| Reconciliation | An explicit server-governed read observes current state without repeating mutation. |
+| Verification | Independent evidence validates the outcome of a completed execution. |
 | Resolution | Successful remediation and VERIFIED evidence still require an explicit human resolution decision. |
 
 ## Persistence and transactions
@@ -226,6 +262,8 @@ SQLite enforces:
 ```text
 UNIQUE (incident_id, mode) WHERE status = 'RUNNING'
 UNIQUE (action_executions.proposal_id)
+UNIQUE (action_execution_attempts.execution_id, attempt_number)
+UNIQUE (action_execution_reconciliations.attempt_id)
 UNIQUE (outcome_verifications.execution_id)
 UNIQUE (incident_resolution_decisions.verification_id)
 UNIQUE (incident_resolution_decisions.incident_id) WHERE decision = 'RESOLVE'

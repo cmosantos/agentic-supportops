@@ -58,6 +58,11 @@ class Settings:
             os.getenv("ACTION_EXECUTION_ATTEMPT_STALE_AFTER_SECONDS", "300")
         )
     )
+    action_execution_reconciliation_stale_after_seconds: int = field(
+        default_factory=lambda: int(
+            os.getenv("ACTION_EXECUTION_RECONCILIATION_STALE_AFTER_SECONDS", "300")
+        )
+    )
     otel_enabled: bool = field(
         default_factory=lambda: os.getenv("OTEL_ENABLED", "false").lower()
         in {"1", "true", "yes", "on"}
@@ -79,6 +84,11 @@ class Settings:
         if self.action_execution_attempt_stale_after_seconds <= 0:
             raise ValueError(
                 "ACTION_EXECUTION_ATTEMPT_STALE_AFTER_SECONDS must be greater than zero"
+            )
+        if self.action_execution_reconciliation_stale_after_seconds <= 0:
+            raise ValueError(
+                "ACTION_EXECUTION_RECONCILIATION_STALE_AFTER_SECONDS must be "
+                "greater than zero"
             )
 
 

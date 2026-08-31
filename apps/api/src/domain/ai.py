@@ -42,6 +42,17 @@ class InvestigationEventType(StrEnum):
     EXECUTION_ATTEMPT_INTERRUPTION_ASSESSED = (
         "execution_attempt_interruption_assessed"
     )
+    RECONCILIATION_REQUESTED = "reconciliation_requested"
+    RECONCILIATION_STARTED = "reconciliation_started"
+    RECONCILIATION_DESIRED_STATE_OBSERVED = (
+        "reconciliation_desired_state_observed"
+    )
+    RECONCILIATION_UNDESIRED_STATE_OBSERVED = (
+        "reconciliation_undesired_state_observed"
+    )
+    RECONCILIATION_INCONCLUSIVE = "reconciliation_inconclusive"
+    RECONCILIATION_RECOVERY_REQUESTED = "reconciliation_recovery_requested"
+    RECONCILIATION_RECOVERY_STARTED = "reconciliation_recovery_started"
     VERIFICATION_REQUESTED = "verification_requested"
     VERIFICATION_STARTED = "verification_started"
     VERIFICATION_VERIFIED = "verification_verified"

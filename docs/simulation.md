@@ -53,4 +53,4 @@ Deterministic playbooks or optional AI investigation
                 Typed local fixture
 ```
 
-The tools contain no prompt, LLM, MCP, or vendor-specific types. Mission 04 keeps OpenAI Responses API integration behind a gateway and passes only validated function calls into these tools. MCP, Agents SDK, RAG, approval workflows, and OpenTelemetry are not implemented.
+The tools contain no prompt, LLM, MCP, or vendor-specific types. Responses API and Agents SDK runtimes remain behind integration boundaries and pass only validated calls into the canonical registry. Optional MCP stdio transports a fixed read-only subset of the same tools. Approval, controlled execution, reconciliation, verification, and optional application-owned OpenTelemetry surround the fixture layer without changing it. RAG remains outside the current simulation.

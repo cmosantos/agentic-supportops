@@ -24,6 +24,10 @@ from domain.action_execution import (
     ActionExecutionRead,
     ActionExecutionStaleAssessmentRead,
 )
+from domain.action_execution_reconciliation import (
+    ActionExecutionReconciliationOperationalRead,
+    ActionExecutionReconciliationRead,
+)
 from domain.outcome_verification import OutcomeVerificationRead
 from domain.incident_resolution import IncidentResolutionCreate, IncidentResolutionRead
 from repositories.incident_repository import IncidentRepository
@@ -33,6 +37,9 @@ from repositories.action_proposal_repository import (
     InvalidApprovalTransitionError,
 )
 from repositories.action_execution_repository import ActionExecutionRepository
+from repositories.action_execution_reconciliation_repository import (
+    ActionExecutionReconciliationRepository,
+)
 from repositories.outcome_verification_repository import OutcomeVerificationRepository
 from repositories.incident_resolution_repository import IncidentResolutionRepository
 from services.incident_service import IncidentService
@@ -56,6 +63,10 @@ from services.action_execution_service import (
 from services.action_execution_recovery_service import (
     ActionExecutionRecoveryError,
     ActionExecutionRecoveryService,
+)
+from services.action_execution_reconciliation_service import (
+    ActionExecutionReconciliationError,
+    ActionExecutionReconciliationService,
 )
 from services.execution_policy import ExecutionPolicy, ExecutionPolicyDeniedError
 from services.outcome_verification_service import (
@@ -542,6 +553,100 @@ def assess_stale_action_execution_attempt(
         }:
             raise _proposal_error(status.HTTP_409_CONFLICT, error.code, error)
         raise
+
+
+@router.post(
+    "/action-executions/{execution_id}/attempts/{attempt_id}/reconcile",
+    response_model=ActionExecutionReconciliationRead,
+)
+def reconcile_action_execution_attempt(
+    execution_id: int,
+    attempt_id: int,
+    session: DatabaseSession,
+    tools: ControlledToolsDependency,
+) -> ActionExecutionReconciliationRead:
+    service = ActionExecutionReconciliationService(
+        ActionExecutionReconciliationRepository(session),
+        VerificationPolicy(),
+        tools,
+    )
+    try:
+        return service.reconcile(execution_id, attempt_id)
+    except ActionExecutionReconciliationError as error:
+        if error.code in {
+            "action_execution_not_found",
+            "execution_attempt_not_found",
+        }:
+            raise _proposal_error(status.HTTP_404_NOT_FOUND, error.code, error)
+        raise _proposal_error(status.HTTP_409_CONFLICT, error.code, error)
+    except VerificationPolicyDeniedError as error:
+        raise _proposal_error(
+            status.HTTP_403_FORBIDDEN,
+            "reconciliation_policy_denied",
+            error,
+        )
+
+
+@router.post(
+    "/action-executions/{execution_id}/attempts/{attempt_id}/reconciliation/recover",
+    response_model=ActionExecutionReconciliationRead,
+)
+def recover_action_execution_reconciliation(
+    execution_id: int,
+    attempt_id: int,
+    session: DatabaseSession,
+    tools: ControlledToolsDependency,
+) -> ActionExecutionReconciliationRead:
+    service = ActionExecutionReconciliationService(
+        ActionExecutionReconciliationRepository(session),
+        VerificationPolicy(),
+        tools,
+        settings.action_execution_reconciliation_stale_after_seconds,
+    )
+    try:
+        return service.recover(execution_id, attempt_id)
+    except ActionExecutionReconciliationError as error:
+        if error.code in {
+            "action_execution_not_found",
+            "execution_attempt_not_found",
+            "action_execution_reconciliation_not_found",
+        }:
+            raise _proposal_error(status.HTTP_404_NOT_FOUND, error.code, error)
+        raise _proposal_error(status.HTTP_409_CONFLICT, error.code, error)
+    except VerificationPolicyDeniedError as error:
+        raise _proposal_error(
+            status.HTTP_403_FORBIDDEN,
+            "reconciliation_policy_denied",
+            error,
+        )
+
+
+@router.get(
+    "/action-executions/{execution_id}/attempts/{attempt_id}/reconciliation",
+    response_model=ActionExecutionReconciliationOperationalRead,
+)
+def get_action_execution_reconciliation(
+    execution_id: int,
+    attempt_id: int,
+    session: DatabaseSession,
+) -> ActionExecutionReconciliationOperationalRead:
+    service = ActionExecutionReconciliationService(
+        ActionExecutionReconciliationRepository(session),
+        VerificationPolicy(),
+        reconciliation_stale_after_seconds=(
+            settings.action_execution_reconciliation_stale_after_seconds
+        ),
+    )
+    try:
+        return service.get_operational_view(execution_id, attempt_id)
+    except ActionExecutionReconciliationError as error:
+        if error.code in {
+            "action_execution_not_found",
+            "execution_attempt_not_found",
+            "action_execution_reconciliation_not_found",
+        }:
+            raise _proposal_error(status.HTTP_404_NOT_FOUND, error.code, error)
+        raise _proposal_error(status.HTTP_409_CONFLICT, error.code, error)
 
 
 @router.post(
