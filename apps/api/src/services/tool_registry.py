@@ -43,7 +43,13 @@ class ToolDefinition:
 
 class InvestigationToolRegistry:
     transport = "direct"
-    _execution_only = frozenset({"restart_simulated_service"})
+    _execution_only = frozenset(
+        {
+            "restart_simulated_service",
+            "unlock_simulated_user",
+            "reset_simulated_application_state",
+        }
+    )
 
     def __init__(self, repository: SimulationRepository | None = None) -> None:
         simulation = repository or SimulationRepository()
@@ -78,6 +84,8 @@ class InvestigationToolRegistry:
             "get_service_health": ToolDefinition(monitoring.get_service_health, "Read one simulated host service's health. Does not restart or modify it.", (("resource_id", "Host identifier."), ("service_name", "Exact service name."))),
             "get_application_health": ToolDefinition(monitoring.get_application_health, "Read simulated application status, latency, error rate, and connection-pool utilization. Read-only.", (("application_id", "Application identifier."),)),
             "restart_simulated_service": ToolDefinition(actions.restart_simulated_service, "Restart exactly one service inside the deterministic lab application abstraction. No host process is touched.", (("target", "Simulated application identifier."), ("service_name", "Exact simulated service name."))),
+            "unlock_simulated_user": ToolDefinition(actions.unlock_simulated_user, "Unlock exactly one user inside the deterministic Contoso simulation. No real account is touched.", (("target", "Simulated user identifier."),)),
+            "reset_simulated_application_state": ToolDefinition(actions.reset_simulated_application_state, "Reset exactly one application inside the deterministic Contoso simulation. No host process is touched.", (("target", "Simulated application identifier."),)),
         }
 
     def execute(self, name: str, arguments: dict[str, str]) -> ToolResult:

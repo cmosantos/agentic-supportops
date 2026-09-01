@@ -21,10 +21,12 @@ class SimulationRepository:
         fixture_path: Path = DEFAULT_FIXTURE_PATH,
         *,
         restart_outcomes: dict[str, str] | None = None,
+        locked_users: Iterable[str] = (),
         unobservable_applications: Iterable[str] = (),
     ) -> None:
         self._fixture_path = fixture_path
         self._application_status: dict[str, str] = {}
+        self._user_locked = {user_id.upper(): True for user_id in locked_users}
         self._restart_outcomes = {
             key.upper(): value for key, value in (restart_outcomes or {}).items()
         }
@@ -38,13 +40,19 @@ class SimulationRepository:
 
     def get_user(self, reference: str) -> User | None:
         normalized = reference.casefold()
-        return next(
+        user = next(
             (
                 user
                 for user in self.load_fixture().environment.users
                 if normalized in {user.id.casefold(), user.display_name.casefold(), user.email.casefold()}
             ),
             None,
+        )
+        if user is None:
+            return None
+        locked = self._user_locked.get(user.id, user.account.locked)
+        return user.model_copy(
+            update={"account": user.account.model_copy(update={"locked": locked})}
         )
 
     def get_mailbox(self, reference: str) -> Mailbox | None:
@@ -96,3 +104,13 @@ class SimulationRepository:
         status = self._restart_outcomes.get(normalized, "healthy")
         self._application_status[normalized] = status
         return status
+
+    def unlock_user(self, user_id: str) -> bool:
+        normalized = user_id.upper()
+        self._user_locked[normalized] = False
+        return self._user_locked[normalized]
+
+    def reset_application(self, application_id: str) -> str:
+        normalized = application_id.upper()
+        self._application_status[normalized] = "healthy"
+        return self._application_status[normalized]

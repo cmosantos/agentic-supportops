@@ -48,3 +48,45 @@ class ActionTools:
                 "restarted": True,
             },
         )
+
+    def unlock_simulated_user(self, target: str) -> ToolResult:
+        user = self._repository.get_user(target)
+        if user is None:
+            return failure(
+                "unlock_simulated_user",
+                target,
+                ToolErrorCode.USER_NOT_FOUND,
+                "User not found",
+            )
+        current_locked = self._repository.unlock_user(user.id)
+        return success(
+            "unlock_simulated_user",
+            user.id,
+            {
+                "target": user.id,
+                "previous_locked": user.account.locked,
+                "current_locked": current_locked,
+                "unlocked": not current_locked,
+            },
+        )
+
+    def reset_simulated_application_state(self, target: str) -> ToolResult:
+        application = self._repository.get_application_for_action(target)
+        if application is None:
+            return failure(
+                "reset_simulated_application_state",
+                target,
+                ToolErrorCode.APPLICATION_NOT_FOUND,
+                "Application not found",
+            )
+        current_state = self._repository.reset_application(application.id)
+        return success(
+            "reset_simulated_application_state",
+            application.id,
+            {
+                "target": application.id,
+                "previous_state": application.status,
+                "current_state": current_state,
+                "reset": True,
+            },
+        )

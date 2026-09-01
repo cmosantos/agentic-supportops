@@ -1,6 +1,7 @@
 from concurrent.futures import ThreadPoolExecutor
 from threading import Event
 
+import pytest
 from fastapi.testclient import TestClient
 
 from api.dependencies import get_controlled_tools
@@ -11,7 +12,11 @@ from tools.monitoring import MonitoringTools
 from tools.actions import ActionTools
 from repositories.investigation_repository import InvestigationRepository
 
-from tests.test_action_execution import create_proposal, execute_url
+from tests.test_action_execution import (
+    create_action_proposal,
+    create_proposal,
+    execute_url,
+)
 from tests.test_action_proposals import proposal_url
 
 
@@ -65,6 +70,49 @@ def test_completed_execution_is_independently_verified_and_idempotent(
         "verification_verified",
     ]
     assert events[-1]["metadata"]["execution_id"] == execution["id"]
+
+
+@pytest.mark.parametrize(
+    ("action_type", "target", "expected_state", "observer"),
+    [
+        ("unlock_simulated_user", "USR-ALICE", "false", "get_account_status"),
+        (
+            "reset_simulated_application_state",
+            "SUPPORT-API",
+            "healthy",
+            "get_application_health",
+        ),
+    ],
+)
+def test_new_mutations_are_independently_verified(
+    seeded_client: TestClient,
+    action_type: str,
+    target: str,
+    expected_state: str,
+    observer: str,
+) -> None:
+    investigation_id, proposal = create_action_proposal(
+        seeded_client, action_type, target
+    )
+    seeded_client.post(f"{proposal_url(investigation_id)}/{proposal['id']}/approve")
+    execution = seeded_client.post(
+        execute_url(investigation_id, proposal["id"])
+    ).json()
+    verification = seeded_client.post(
+        f"/action-executions/{execution['id']}/verify",
+        json={"target": "OTHER", "observer": "run_arbitrary_command"},
+    )
+
+    assert verification.status_code == 200, verification.text
+    assert verification.json()["status"] == "verified"
+    assert verification.json()["expected_outcome"] == {"state": expected_state}
+    assert verification.json()["observed_outcome"] == {"state": expected_state}
+    assert verification.json()["evidence"] == {
+        "target": target,
+        "observer": observer,
+        "expected_state": expected_state,
+        "observed_state": expected_state,
+    }
 
 
 def test_completed_execution_can_be_not_verified_without_rewriting_history(

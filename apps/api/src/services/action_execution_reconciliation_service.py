@@ -203,7 +203,7 @@ class ActionExecutionReconciliationService:
             raise RuntimeError("Reconciliation observer registry is unavailable")
         try:
             observation = self._tools.execute(
-                strategy.observer, {"application_id": proposal.target}
+                strategy.observer, strategy.arguments(proposal.target)
             )
         except Exception:
             return self._finish_inconclusive(
@@ -215,13 +215,12 @@ class ActionExecutionReconciliationService:
                 execution, attempt, proposal, reconciliation, runtime
             )
 
-        raw_state = observation.data.get("status")
-        if not isinstance(raw_state, str) or not raw_state.strip():
+        observed_state = strategy.observed_state(observation.data)
+        if observed_state is None:
             return self._finish_inconclusive(
                 execution, attempt, proposal, reconciliation, runtime
             )
 
-        observed_state = raw_state.casefold()
         observed = {"state": observed_state}
         evidence = {
             "target": proposal.target,

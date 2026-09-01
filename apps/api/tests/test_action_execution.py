@@ -34,6 +34,7 @@ from repositories.action_execution_repository import ActionExecutionRepository
 from repositories.investigation_repository import InvestigationRepository
 from simulation.repository import SimulationRepository
 from simulation.seed import seed_catalog
+from services.execution_policy import ExecutionPolicy, ExecutionPolicyDeniedError
 from services.tool_registry import InvestigationToolRegistry
 from tools.actions import ActionTools
 
@@ -58,6 +59,18 @@ def create_proposal(client: TestClient, *, target: str = "SUPPORT-API") -> tuple
         proposal_url(investigation_id),
         json=executable_payload(investigation["evidence"][0]["id"], target),
     )
+    assert response.status_code == 201, response.text
+    return investigation_id, response.json()
+
+
+def create_action_proposal(
+    client: TestClient, action_type: str, target: str
+) -> tuple[int, dict]:
+    investigation = run_actionable_investigation(client)
+    investigation_id = investigation["investigation"]["id"]
+    payload = proposal_payload(investigation["evidence"][0]["id"], action_type)
+    payload["target"] = target
+    response = client.post(proposal_url(investigation_id), json=payload)
     assert response.status_code == 201, response.text
     return investigation_id, response.json()
 
@@ -144,6 +157,82 @@ def test_pending_and_rejected_proposals_cannot_execute(seeded_client: TestClient
     assert pending_response.status_code == 409
     assert rejected_response.status_code == 409
     assert pending_response.json()["detail"]["code"] == "proposal_not_approved"
+
+
+@pytest.mark.parametrize(
+    ("action_type", "target"),
+    [
+        ("unlock_simulated_user", "USR-ALICE"),
+        ("reset_simulated_application_state", "SUPPORT-API"),
+    ],
+)
+def test_new_mutations_require_approval(
+    seeded_client: TestClient, action_type: str, target: str
+) -> None:
+    investigation_id, proposal = create_action_proposal(
+        seeded_client, action_type, target
+    )
+
+    response = seeded_client.post(execute_url(investigation_id, proposal["id"]))
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "proposal_not_approved"
+
+
+@pytest.mark.parametrize(
+    ("action_type", "target", "method_name", "result_key", "expected_value"),
+    [
+        (
+            "unlock_simulated_user",
+            "USR-ALICE",
+            "unlock_simulated_user",
+            "current_locked",
+            False,
+        ),
+        (
+            "reset_simulated_application_state",
+            "SUPPORT-API",
+            "reset_simulated_application_state",
+            "current_state",
+            "healthy",
+        ),
+    ],
+)
+def test_approved_new_mutations_use_persisted_target_and_execute_once(
+    seeded_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    action_type: str,
+    target: str,
+    method_name: str,
+    result_key: str,
+    expected_value,
+) -> None:
+    investigation_id, proposal = create_action_proposal(
+        seeded_client, action_type, target
+    )
+    seeded_client.post(f"{proposal_url(investigation_id)}/{proposal['id']}/approve")
+    calls = []
+    original = getattr(ActionTools, method_name)
+
+    def counted(self, target):
+        calls.append(target)
+        return original(self, target)
+
+    monkeypatch.setattr(ActionTools, method_name, counted)
+    url = execute_url(investigation_id, proposal["id"])
+    first = seeded_client.post(
+        url,
+        json={"capability": "run_arbitrary_command", "target": "OTHER"},
+    )
+    duplicate = seeded_client.post(url)
+
+    assert first.status_code == 200, first.text
+    assert first.json()["status"] == "completed"
+    assert first.json()["capability_name"] == action_type
+    assert first.json()["result"]["data"]["target"] == target
+    assert first.json()["result"]["data"][result_key] == expected_value
+    assert duplicate.json() == first.json()
+    assert calls == [target]
 
 
 def test_approved_proposal_executes_persisted_action_once_and_is_audited(
@@ -628,19 +717,9 @@ def test_terminal_and_fallback_persistence_failure_leaves_durable_running(
     ]
 
 
-def test_execution_policy_blocks_other_approved_proposal(seeded_client: TestClient) -> None:
-    investigation = run_actionable_investigation(seeded_client)
-    investigation_id = investigation["investigation"]["id"]
-    proposal = seeded_client.post(
-        proposal_url(investigation_id),
-        json=proposal_payload(investigation["evidence"][0]["id"]),
-    ).json()
-    seeded_client.post(f"{proposal_url(investigation_id)}/{proposal['id']}/approve")
-
-    response = seeded_client.post(execute_url(investigation_id, proposal["id"]))
-
-    assert response.status_code == 403
-    assert response.json()["detail"]["code"] == "execution_policy_denied"
+def test_execution_policy_blocks_unknown_capability() -> None:
+    with pytest.raises(ExecutionPolicyDeniedError):
+        ExecutionPolicy().authorize("run_arbitrary_command")
 
 
 def test_capability_failure_is_persisted_without_changing_approval(
@@ -712,10 +791,15 @@ def test_execution_record_survives_session_reload_and_database_rejects_duplicate
 
 def test_execution_capability_is_registered_but_not_advertised_to_investigators() -> None:
     registry = InvestigationToolRegistry()
-    assert "restart_simulated_service" not in registry.names
-    assert "restart_simulated_service" not in {
-        item["name"] for item in registry.openai_tools
+    mutable_capabilities = {
+        "restart_simulated_service",
+        "unlock_simulated_user",
+        "reset_simulated_application_state",
     }
+    assert mutable_capabilities.isdisjoint(registry.names)
+    assert mutable_capabilities.isdisjoint(
+        {item["name"] for item in registry.openai_tools}
+    )
     _, blocked = registry.dispatch(
         "restart_simulated_service",
         '{"target":"SUPPORT-API","service_name":"SupportApi"}',
@@ -727,3 +811,16 @@ def test_execution_capability_is_registered_but_not_advertised_to_investigators(
         {"target": "SUPPORT-API", "service_name": "SupportApi"},
     )
     assert result.success is True
+
+
+def test_unlock_mutates_only_the_local_simulated_user_state() -> None:
+    simulation = SimulationRepository(locked_users={"USR-ALICE"})
+    registry = InvestigationToolRegistry(simulation)
+
+    before = registry.execute("get_account_status", {"user_id": "USR-ALICE"})
+    result = registry.execute("unlock_simulated_user", {"target": "USR-ALICE"})
+    after = registry.execute("get_account_status", {"user_id": "USR-ALICE"})
+
+    assert before.data["locked"] is True
+    assert result.success is True
+    assert after.data["locked"] is False

@@ -48,7 +48,7 @@ class OutcomeVerificationService:
 
         try:
             observation = self._tools.execute(
-                strategy.observer, {"application_id": proposal.target}
+                strategy.observer, strategy.arguments(proposal.target)
             )
         except Exception:
             verification = self._repository.finish(
@@ -84,7 +84,22 @@ class OutcomeVerificationService:
             )
             return OutcomeVerificationRead.model_validate(verification)
 
-        observed_state = str(observation.data.get("status", "unknown")).casefold()
+        observed_state = strategy.observed_state(observation.data)
+        if observed_state is None:
+            verification = self._repository.finish(
+                execution,
+                proposal,
+                verification,
+                runtime,
+                OutcomeVerificationStatus.FAILED,
+                None,
+                None,
+                {
+                    "code": "observer_failure",
+                    "message": "Unable to collect reliable post-execution evidence",
+                },
+            )
+            return OutcomeVerificationRead.model_validate(verification)
         observed = {"state": observed_state}
         evidence = {
             "target": proposal.target,

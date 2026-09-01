@@ -119,6 +119,7 @@ class ActionExecutionService:
             safe_pre_mutation_failure = error["code"] in {
                 "application_not_found",
                 "service_not_found",
+                "user_not_found",
             }
             if safe_pre_mutation_failure:
                 execution = self._persist_known_rejection(

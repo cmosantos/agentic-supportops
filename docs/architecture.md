@@ -141,7 +141,7 @@ Execution Result
 Persistence + Audit Events
 ```
 
-Human approval does not give the AI unrestricted tool access. It permits one attempt of one persisted proposal. `ExecutionPolicy` independently allows only `restart_simulated_service`; the endpoint accepts no replacement action data, and the executor combines the persisted proposal target with its persisted parameters. It does not call Responses API, Agents SDK, MCP, or any model to reinterpret the action.
+Human approval does not give the AI unrestricted tool access. It permits one attempt of one persisted proposal. `ExecutionPolicy` independently and explicitly allows only `restart_simulated_service`, `unlock_simulated_user`, and `reset_simulated_application_state`; the endpoint accepts no replacement action data, and the executor combines the persisted proposal target with its persisted parameters. Each capability mutates only the deterministic local Contoso simulation. It does not call Responses API, Agents SDK, MCP, or any model to reinterpret the action.
 
 The capability operates entirely over the local Contoso application abstraction. For a known application/service it returns a deterministic transition such as `degraded -> healthy`; an unknown target produces a controlled failure. It invokes no shell, subprocess, Windows service manager, Docker, operating-system API, filesystem write, or external HTTP request.
 
@@ -198,7 +198,7 @@ flowchart TD
     Evidence --> Failed[FAILED]
 ```
 
-`POST /action-executions/{execution_id}/verify` accepts no verification command. The service loads the execution, its proposal, and the approved target from SQLite. `VerificationPolicy` maps the persisted `restart_simulated_service` capability to the canonical `get_application_health` read-only capability and expected `healthy` state. Neither client nor model selects the target, observer, or arguments.
+`POST /action-executions/{execution_id}/verify` accepts no verification command. The service loads the execution, its proposal, and the approved target from SQLite. `VerificationPolicy` maps persisted service restart and application reset capabilities to the canonical `get_application_health` read-only capability and expected `healthy` state; user unlock maps to `get_account_status` and expected `locked=false`. Neither client nor model selects the target, observer, or arguments.
 
 The observer performs a new read of the simulated application state; it never trusts `execution.result.current_state`. A successful matching observation produces `VERIFIED`; a successful non-matching observation produces `NOT_VERIFIED`; an unavailable or failed observer produces `FAILED` with a bounded safe error. No Responses API, Agents SDK, model, MCP agent loop, shell, subprocess, or external system is called.
 

@@ -80,7 +80,7 @@ AI Investigator -> Proposal -> Human Decision -> APPROVED only
                -> Execution Result -> Persistence + Audit Events
 ```
 
-Human approval does not give the AI unrestricted tool access. `restart_simulated_service` is registered for controlled execution but excluded from investigation schemas and the MCP allowlist. The execute endpoint accepts no capability, target, or argument body: those values come from the persisted proposal. No model is called during execution.
+Human approval does not give the AI unrestricted tool access. `restart_simulated_service`, `unlock_simulated_user`, and `reset_simulated_application_state` are registered for controlled execution but excluded from investigation schemas and the MCP allowlist. The execute endpoint accepts no capability, target, or argument body: those values come from the persisted proposal. All three mutations affect only the deterministic local Contoso simulation, and no model is called during execution.
 
 SQLite enforces one `action_executions` row per proposal and one canonical physical attempt. The attempt records whether invocation started, its `failure_cause`, and its `outcome_certainty`. A known pre-mutation rejection is `NOT_APPLIED`; a timeout, acknowledgement loss, invalid result, or interruption after invocation is `UNKNOWN` and moves the execution to `OUTCOME_UNKNOWN`. Unknown mutation outcome is never automatically retried. The system reconciles by observing governed read-only state.
 
@@ -113,7 +113,7 @@ AI Investigator -> Proposal -> Human Approval -> Execution Policy
                 -> Verification Evidence -> VERIFIED | NOT_VERIFIED | FAILED
 ```
 
-`restart_simulated_service` maps server-side to the existing `get_application_health` observer with expected state `healthy`. This is a new read after execution, never an inference from `execution.result`. `VERIFIED` means the expected state was observed, `NOT_VERIFIED` means a reliable observation did not satisfy it, and `FAILED` means no reliable observation could be collected. No AI/model, MCP loop, shell, subprocess, external monitoring, or real service management participates.
+`restart_simulated_service` and `reset_simulated_application_state` map server-side to the existing `get_application_health` observer with expected state `healthy`. `unlock_simulated_user` maps to `get_account_status` with expected `locked=false`. These are new reads after execution, never inferences from `execution.result`. `VERIFIED` means the expected state was observed, `NOT_VERIFIED` means a reliable observation did not satisfy it, and `FAILED` means no reliable observation could be collected. No AI/model, MCP loop, shell, subprocess, external monitoring, or real service or account management participates.
 
 SQLite enforces one `outcome_verifications` row per execution. Requested/started events and the terminal verification state/event follow the existing transactional event pattern. Repeated requests return the canonical record without observing again. A verified outcome is human-visible evidence only: **`VERIFIED` does not automatically mean `INCIDENT RESOLVED`** and does not alter proposal, approval, execution, or incident history.
 
