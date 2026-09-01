@@ -25,6 +25,7 @@ from domain.action_execution import (
     ActionExecutionRead,
     ActionExecutionStaleAssessmentRead,
 )
+from domain.action_execution_timeline import ActionExecutionTimelineEntry
 from domain.action_execution_reconciliation import (
     ActionExecutionReconciliationOperationalRead,
     ActionExecutionReconciliationRead,
@@ -38,6 +39,9 @@ from repositories.action_proposal_repository import (
     InvalidApprovalTransitionError,
 )
 from repositories.action_execution_repository import ActionExecutionRepository
+from repositories.action_execution_timeline_repository import (
+    ActionExecutionTimelineRepository,
+)
 from repositories.action_execution_reconciliation_repository import (
     ActionExecutionReconciliationRepository,
 )
@@ -66,6 +70,10 @@ from services.action_execution_service import (
 from services.action_execution_recovery_service import (
     ActionExecutionRecoveryError,
     ActionExecutionRecoveryService,
+)
+from services.action_execution_timeline_service import (
+    ActionExecutionTimelineNotFoundError,
+    ActionExecutionTimelineService,
 )
 from services.action_execution_reconciliation_service import (
     ActionExecutionReconciliationError,
@@ -567,6 +575,24 @@ def get_action_execution_canonical_attempt(
     except ActionExecutionAttemptNotFoundError as error:
         raise _proposal_error(
             status.HTTP_404_NOT_FOUND, "execution_attempt_not_found", error
+        )
+
+
+@router.get(
+    "/action-executions/{execution_id}/timeline",
+    response_model=list[ActionExecutionTimelineEntry],
+)
+def get_action_execution_timeline(
+    execution_id: int,
+    session: DatabaseSession,
+) -> list[ActionExecutionTimelineEntry]:
+    try:
+        return ActionExecutionTimelineService(
+            ActionExecutionTimelineRepository(session)
+        ).get(execution_id)
+    except ActionExecutionTimelineNotFoundError as error:
+        raise _proposal_error(
+            status.HTTP_404_NOT_FOUND, "action_execution_not_found", error
         )
 
 

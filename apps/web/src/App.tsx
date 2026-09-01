@@ -145,6 +145,15 @@ type IncidentResolutionDecision = {
   reason: string | null;
   decided_at: string;
 };
+type ActionExecutionTimelineEntry = {
+  timestamp: string;
+  event_type: string;
+  execution_id: number;
+  attempt_id: number | null;
+  status: string | null;
+  description: string;
+  reason: string | null;
+};
 type Investigation = {
   incident_id: number;
   catalog_id: string | null;
@@ -177,6 +186,7 @@ type InvestigationMode = "deterministic" | "ai";
 type AIMetadata = { status: AIStatus; model: string };
 type ExecutionLookupStatus = "idle" | "loading" | "not_found" | "found" | "error";
 type ReconciliationLookupStatus = "idle" | "loading" | "not_found" | "found" | "error";
+type TimelineLookupStatus = "idle" | "loading" | "loaded" | "error";
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
 
@@ -244,11 +254,40 @@ export function App() {
   const [resolutionDecisions, setResolutionDecisions] = useState<IncidentResolutionDecision[]>([]);
   const [resolutionReason, setResolutionReason] = useState("");
   const [decidingResolution, setDecidingResolution] = useState(false);
+  const [executionTimeline, setExecutionTimeline] = useState<ActionExecutionTimelineEntry[]>([]);
+  const [timelineLookupStatus, setTimelineLookupStatus] = useState<TimelineLookupStatus>("idle");
   const investigationRequest = useRef<AbortController | null>(null);
   const investigationVersion = useRef(0);
   const proposalDecisionInFlight = useRef(false);
   const executionRequestInFlight = useRef(false);
   const reconciliationRequestInFlight = useRef(false);
+
+  async function loadExecutionTimeline(
+    executionId: number,
+    signal?: AbortSignal,
+    requestVersion?: number,
+  ) {
+    const isCurrent = () => requestVersion === undefined || requestVersion === investigationVersion.current;
+    setTimelineLookupStatus("loading");
+    try {
+      const response = await fetch(
+        `${apiBaseUrl}/action-executions/${executionId}/timeline`,
+        { signal },
+      );
+      if (!isCurrent()) return;
+      if (!response.ok) {
+        setExecutionTimeline([]);
+        setTimelineLookupStatus("error");
+        return;
+      }
+      setExecutionTimeline(await response.json());
+      setTimelineLookupStatus("loaded");
+    } catch {
+      if (signal?.aborted || !isCurrent()) return;
+      setExecutionTimeline([]);
+      setTimelineLookupStatus("error");
+    }
+  }
 
   async function loadReconciliationContext(
     execution: ActionExecution,
@@ -365,6 +404,8 @@ export function App() {
     setResolutionDecisions([]);
     setResolutionReason("");
     setDecidingResolution(false);
+    setExecutionTimeline([]);
+    setTimelineLookupStatus("idle");
     setMode(null);
     setInvestigationError(null);
     setInvestigating(false);
@@ -406,6 +447,8 @@ export function App() {
     setResolutionDecisions([]);
     setResolutionReason("");
     setDecidingResolution(false);
+    setExecutionTimeline([]);
+    setTimelineLookupStatus("idle");
     setMode(investigationMode);
 
     async function loadProposalAndExecution(proposal: ActionProposal, reference: string | number) {
@@ -429,7 +472,10 @@ export function App() {
         const execution: ActionExecution = await executionResponse.json();
         setActionExecution(execution);
         setExecutionLookupStatus("found");
-        await loadReconciliationContext(execution, controller.signal, requestVersion);
+        await Promise.all([
+          loadReconciliationContext(execution, controller.signal, requestVersion),
+          loadExecutionTimeline(execution.id, controller.signal, requestVersion),
+        ]);
       } catch (error: unknown) {
         if (controller.signal.aborted || requestVersion !== investigationVersion.current) return;
         setExecutionLookupStatus("error");
@@ -544,7 +590,10 @@ export function App() {
       const execution: ActionExecution = await response.json();
       setActionExecution(execution);
       setExecutionLookupStatus("found");
-      await loadReconciliationContext(execution);
+      await Promise.all([
+        loadReconciliationContext(execution),
+        loadExecutionTimeline(execution.id),
+      ]);
       if (execution.status === "completed") {
         try {
           const verificationResponse = await fetch(
@@ -589,7 +638,9 @@ export function App() {
         `${apiBaseUrl}/incidents/${reference}/investigation-runs/${actionProposal.investigation_id}/action-proposals/${actionProposal.id}/execution`,
       );
       if (!executionResponse.ok) throw new Error(await investigationErrorMessage(executionResponse));
-      setActionExecution(await executionResponse.json());
+      const refreshedExecution: ActionExecution = await executionResponse.json();
+      setActionExecution(refreshedExecution);
+      await loadExecutionTimeline(refreshedExecution.id);
     } catch (error: unknown) {
       setProposalError(error instanceof Error ? error.message : "Reconciliation failed");
     } finally {
@@ -614,6 +665,7 @@ export function App() {
       );
       if (!response.ok) throw new Error(await investigationErrorMessage(response));
       setOutcomeVerification(await response.json());
+      await loadExecutionTimeline(actionExecution.id);
     } catch (error: unknown) {
       setProposalError(error instanceof Error ? error.message : "Outcome verification failed");
     } finally {
@@ -655,6 +707,7 @@ export function App() {
           item.id === resolution.incident_id ? { ...item, status: "resolved" } : item
         ));
       }
+      if (actionExecution) await loadExecutionTimeline(actionExecution.id);
     } catch (error: unknown) {
       setProposalError(error instanceof Error ? error.message : "Resolution decision failed");
     } finally {
@@ -840,6 +893,37 @@ export function App() {
                           <p className="error">
                             Execution outcome is unknown. The action will not be retried automatically; reconciliation is required before any further mutation.
                           </p>
+                        )}
+                      </section>
+                    )}
+                    {actionExecution && (
+                      <section className="result-section execution-timeline" aria-label="Execution Timeline">
+                        <h4>Execution Timeline</h4>
+                        {timelineLookupStatus === "loading" && (
+                          <p role="status">Loading execution timeline…</p>
+                        )}
+                        {timelineLookupStatus === "error" && (
+                          <p className="error" role="alert">Unable to load execution timeline.</p>
+                        )}
+                        {timelineLookupStatus === "loaded" && executionTimeline.length === 0 && (
+                          <p>No persisted lifecycle events are available for this execution.</p>
+                        )}
+                        {timelineLookupStatus === "loaded" && executionTimeline.length > 0 && (
+                          <ol>
+                            {executionTimeline.map((entry, index) => (
+                              <li key={`${entry.timestamp}-${entry.event_type}-${index}`} className={`timeline-${entry.status ?? "recorded"}`}>
+                                <time dateTime={entry.timestamp}>{new Date(entry.timestamp).toLocaleString()}</time>
+                                <p><b>{displayStatus(entry.event_type)}</b></p>
+                                <p>{entry.description}</p>
+                                <small>
+                                  Execution #{entry.execution_id}
+                                  {entry.attempt_id ? ` · Attempt #${entry.attempt_id}` : ""}
+                                  {entry.status ? ` · ${displayStatus(entry.status).toUpperCase()}` : ""}
+                                </small>
+                                {entry.reason && <small>Reason: {displayStatus(entry.reason)}</small>}
+                              </li>
+                            ))}
+                          </ol>
                         )}
                       </section>
                     )}

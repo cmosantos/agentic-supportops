@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -197,6 +197,27 @@ const resolvedDecision = {
   decided_at: "2026-08-28T12:16:00Z",
 } as const;
 
+const executionTimeline = [
+  {
+    timestamp: "2026-08-28T12:14:00Z",
+    event_type: "execution_requested",
+    execution_id: 50,
+    attempt_id: 51,
+    status: "running",
+    description: "Controlled execution was requested.",
+    reason: null,
+  },
+  {
+    timestamp: "2026-08-28T12:14:01Z",
+    event_type: "execution_completed",
+    execution_id: 50,
+    attempt_id: null,
+    status: "completed",
+    description: "Execution reached completed state.",
+    reason: "acknowledged_result",
+  },
+] as const;
+
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
@@ -213,6 +234,7 @@ function installFetch(options?: {
   proposals?: (url: string, init?: RequestInit) => Promise<Response>;
   reconciliation?: (url: string, init?: RequestInit) => Promise<Response>;
   resolution?: (url: string, init?: RequestInit) => Promise<Response>;
+  timeline?: (url: string, init?: RequestInit) => Promise<Response>;
   post?: (url: string, init?: RequestInit) => Promise<Response>;
 }) {
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -236,6 +258,9 @@ function installFetch(options?: {
       return options?.execution
         ? options.execution(url, init)
         : jsonResponse({ detail: { code: "action_execution_not_found", message: "Action execution not found" } }, 404);
+    }
+    if (url.endsWith("/timeline") && (!init?.method || init.method === "GET")) {
+      return options?.timeline ? options.timeline(url, init) : jsonResponse(executionTimeline);
     }
     if (url.endsWith("/attempt") && (!init?.method || init.method === "GET")) {
       return options?.attempt ? options.attempt(url, init) : jsonResponse(canonicalUnknownAttempt);
@@ -711,6 +736,56 @@ describe("Agentic SupportOps operator workflow", () => {
     expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith("/execute"))).toHaveLength(0);
   });
 
+  it("renders the execution timeline in API order with attempt and reason", async () => {
+    installFetch({
+      aiConfigured: true,
+      proposals: async () => jsonResponse([approvedExecutableProposal]),
+      execution: async () => jsonResponse(completedExecution),
+      post: async (url) => url.endsWith("/investigate-ai")
+        ? jsonResponse(actionableExecution)
+        : Promise.reject(new Error(`Unexpected request: ${url}`)),
+    });
+    render(<App />);
+    await selectIncident();
+    await userEvent.click(await screen.findByRole("button", { name: "Run AI investigation" }));
+
+    const timeline = await screen.findByRole("region", { name: "Execution Timeline" });
+    const items = within(timeline).getAllByRole("listitem");
+    expect(items).toHaveLength(2);
+    expect(items[0]).toHaveTextContent("execution requested");
+    expect(items[0]).toHaveTextContent("Attempt #51");
+    expect(items[1]).toHaveTextContent("execution completed");
+    expect(items[1]).toHaveTextContent("Reason: acknowledged result");
+  });
+
+  it("renders empty and error states for the execution timeline", async () => {
+    const timeline = vi.fn()
+      .mockResolvedValueOnce(jsonResponse([]))
+      .mockResolvedValueOnce(jsonResponse({ detail: "unavailable" }, 503));
+    const fetchOptions = {
+      aiConfigured: true,
+      proposals: async () => jsonResponse([approvedExecutableProposal]),
+      execution: async () => jsonResponse(completedExecution),
+      timeline,
+      post: async (url: string) => url.endsWith("/investigate-ai")
+        ? jsonResponse(actionableExecution)
+        : Promise.reject(new Error(`Unexpected request: ${url}`)),
+    };
+
+    installFetch(fetchOptions);
+    const first = render(<App />);
+    await selectIncident();
+    await userEvent.click(await screen.findByRole("button", { name: "Run AI investigation" }));
+    expect(await screen.findByText(/No persisted lifecycle events/)).toBeVisible();
+    first.unmount();
+
+    installFetch(fetchOptions);
+    render(<App />);
+    await selectIncident();
+    await userEvent.click(await screen.findByRole("button", { name: "Run AI investigation" }));
+    expect(await screen.findByText("Unable to load execution timeline.")).toBeVisible();
+  });
+
   it("rehydrates a persisted FAILED execution", async () => {
     installFetch({
       aiConfigured: true,
@@ -846,6 +921,9 @@ describe("Agentic SupportOps operator workflow", () => {
     expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith("/reconcile"))).toHaveLength(1);
     resolveReconciliation(jsonResponse(reconciliationResult));
     expect((await screen.findByText("Reconciliation status:")).closest("p")).toHaveTextContent("DESIRED STATE OBSERVED");
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith("/timeline"))).toHaveLength(2);
+    });
   });
 
   it.each([

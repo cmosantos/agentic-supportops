@@ -294,6 +294,16 @@ Tests validate fresh databases, legacy constraint/index forms, preservation, ind
 
 Persisted events are the domain audit timeline. OpenTelemetry is an optional technical view around request, investigation, model, tool, and selected persistence boundaries.
 
+### Operational Execution Timeline
+
+`GET /action-executions/{execution_id}/timeline` exposes a read-only projection of the persisted lifecycle facts that belong to one controlled execution. The projection reuses `investigation_events`, their timestamps, statuses, sequence, and bounded metadata such as `execution_id`, `attempt_id`, assessment reason, completion basis, observed state, and human resolution decision. It does not create a second event store.
+
+The repository first resolves `ActionExecution -> ActionProposal -> AIInvestigation`, then selects only events whose persisted metadata identifies the requested execution. Entries are ordered chronologically by timestamp, with event sequence and record ID as deterministic tie-breakers. Events from another execution in the same investigation are excluded. If an old or manually constructed execution has no provable lifecycle events, the endpoint returns an empty list instead of reconstructing or inventing history.
+
+Lifecycle state and observability remain distinct. `action_executions`, physical attempts, reconciliations, outcome verifications, and resolution decisions continue to own their state machines and transaction boundaries. The timeline only describes the audit events produced by those transitions; a GET cannot invoke a capability, assess staleness, renew a recovery lease, reconcile, verify, resolve, append an event, or change a timestamp.
+
+This preserves governance because the projection grants no new authority. Human approval remains required for controlled execution, unknown mutation outcomes remain non-retryable, reconciliation remains read-only and explicit, verification remains independent, and incident resolution remains a separate human decision. The timeline makes those boundaries visible without weakening them.
+
 Tracing is off by default. Supported local exporters are `none` and `console`; no collector is required. Safe resource identifiers may be attached to spans, while prompts, evidence payloads, credentials, response bodies, and headers are excluded.
 
 ## Operator control and limits

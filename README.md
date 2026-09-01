@@ -106,6 +106,8 @@ Recovery is explicit and only claims a canonical `RUNNING` reconciliation after 
 
 The operator UI discovers attempt #1 through the side-effect-free canonical-attempt GET, then reads the reconciliation view. It exposes reconciliation only after an explicit click, never retries the mutation, and reports stale recovery eligibility without starting recovery.
 
+The Action Execution area also presents an Operational Execution Timeline from `GET /action-executions/{execution_id}/timeline`. It is a chronological, read-only projection of the existing persisted audit events for that execution, including attempt, stale assessment, reconciliation, verification, and related human resolution facts when they were actually recorded. It does not infer missing history or alter lifecycle state.
+
 ## 🔎 Post-execution outcome verification
 
 Execution success proves that the approved action ran successfully. It does not prove that the incident condition was corrected. After a `COMPLETED` execution, the operator may request one canonical verification. The server derives the approved target from the persisted execution and proposal; the client supplies neither target nor observer.

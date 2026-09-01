@@ -68,6 +68,14 @@ pre { overflow: auto; padding: 0.75rem; background: #f4f6fa; font-size: 0.8rem; 
 .diagnosis-heading small { margin: 0; text-transform: capitalize; }
 .result-section { margin-top: 1rem; }
 .result-section ul { margin-bottom: 0; padding-left: 1.25rem; }
+.execution-timeline ol { margin: 0; padding-left: 1.5rem; }
+.execution-timeline li { margin-top: 0.75rem; padding: 0 0 0.75rem 0.5rem; border-bottom: 1px solid #dfe4ec; }
+.execution-timeline li:last-child { border-bottom: 0; }
+.execution-timeline time, .execution-timeline small { color: #596579; }
+.execution-timeline p { margin: 0.25rem 0; }
+.execution-timeline .timeline-failed,
+.execution-timeline .timeline-outcome_unknown,
+.execution-timeline .timeline-inconclusive { border-left: 0.25rem solid #c92a2a; }
 
 @media (max-width: 760px) {
   .workspace { grid-template-columns: 1fr; }

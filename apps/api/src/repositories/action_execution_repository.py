@@ -128,6 +128,7 @@ class ActionExecutionRepository:
                 proposal.investigation_id
             )
             metadata = self._metadata(proposal, record)
+            metadata["attempt_id"] = attempt.id
             self._investigations.record_event(
                 proposal.investigation_id,
                 runtime,
