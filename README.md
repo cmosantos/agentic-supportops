@@ -8,7 +8,7 @@ This is not a general-purpose chatbot. The unit of work is an incident. An inves
 
 ## ✅ What is implemented
 
-- React/Vite operator UI for the fictional incident catalog and deterministic or Responses API investigations.
+- React/Vite operations console for the incident lifecycle, with deterministic, Responses API, and Agents SDK investigations.
 - FastAPI endpoints for incidents, investigations, evidence, latest state, run/event history, health, and AI configuration.
 - Declarative playbooks backed by 20 provider-independent, read-only SupportOps tools.
 - Optional OpenAI Responses API and comparative OpenAI Agents SDK runtimes.
@@ -69,7 +69,7 @@ The frontend never talks to MCP directly; it calls FastAPI. MCP is an internal a
 7. A structured result completes the run, or a controlled failure marks it failed. Without useful evidence, the result becomes `insufficient_evidence` rather than presenting unsupported certainty. The terminal event and run transition share one transaction.
 8. Latest endpoints keep compatibility; historical endpoints retrieve prior runs, event timelines, and run-scoped artifacts explicitly.
 
-Models produce diagnoses, recommendations, and optional structured action proposals. The application validates proposal types, parameters, investigation ownership, and evidence references before a human may approve or reject. Approval never invokes an action automatically. For the sole executable action, a later operator request replays the exact persisted proposal through a separate execution allowlist and deterministic executor.
+Models produce diagnoses, recommendations, and optional structured action proposals. The application validates proposal types, parameters, investigation ownership, and evidence references before a human may approve or reject. Approval never invokes an action automatically. For the three executable simulated actions, a later operator request replays the exact persisted proposal through a separate execution allowlist and deterministic executor.
 
 ## 🔐 Controlled action execution
 
@@ -277,7 +277,7 @@ uv run --project .\apps\api --frozen python -m pytest .\apps\api\tests
 uv run --project .\apps\api --frozen python -m pytest .\apps\api\tests\test_mcp_integration.py
 ```
 
-The focused frontend behavioral suite uses Vitest, React Testing Library, and jsdom. It exercises incident loading and selection, investigation success/failure states, AI/deterministic distinctions, and stale-response protection without a live backend or model call:
+The focused frontend behavioral suite uses Vitest, React Testing Library, and jsdom. It exercises incident loading and selection, all investigation runtime choices, historical runs and timeline, governed proposal/execution, unknown-outcome reconciliation, verification, human resolution, and stale-response protection without a live backend or model call:
 
 ```powershell
 Set-Location .\apps\web
@@ -330,7 +330,7 @@ Invoke-RestMethod http://localhost:8000/incidents/INC-014/investigation-runs
 
 ## 📌 Current scope and future evolution
 
-The project is currently a single-user local application over simulation data. It demonstrates controlled read-only investigation, optional model orchestration, MCP transport comparison, durable run/event history, local observability, and one approval-gated lab action. It does not remediate real systems.
+The project is currently a single-user local application over simulation data. It demonstrates controlled read-only investigation, optional model orchestration, MCP transport comparison, durable run/event history, local observability, and three approval-gated simulated actions. The operator console presents these capabilities as one incident-centered lifecycle. It does not remediate real systems.
 
 Not yet included:
 
@@ -340,7 +340,6 @@ Not yet included:
 - PostgreSQL or production database operations;
 - external ticketing/infrastructure integrations;
 - hosted telemetry, deployment, or cloud infrastructure;
-- frontend views for complete historical run/event APIs.
 
 See [Publication readiness](docs/publication-readiness.md) for the verified publication and validation baseline.
 

@@ -164,6 +164,7 @@ function installFetch(options?: {
   aiConfigured?: boolean;
   incidentsOverride?: readonly unknown[];
   resolution?: (url: string, init?: RequestInit) => Promise<Response>;
+  get?: (url: string, init?: RequestInit) => Promise<Response | undefined>;
   post?: (url: string, init?: RequestInit) => Promise<Response>;
 }) {
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -176,6 +177,12 @@ function installFetch(options?: {
     if (url.endsWith("/incidents")) return jsonResponse(options?.incidentsOverride ?? incidents);
     if (url.endsWith("/ai/config")) {
       return jsonResponse({ configured: options?.aiConfigured ?? false });
+    }
+    if (!init?.method || init.method === "GET") {
+      const custom = options?.get ? await options.get(url, init) : undefined;
+      if (custom) return custom;
+      if (url.endsWith("/investigation-runs")) return jsonResponse([]);
+      if (url.endsWith("/events")) return jsonResponse([]);
     }
     if (url.endsWith("/resolution-decisions")) {
       return options?.resolution ? options.resolution(url, init) : jsonResponse([]);
@@ -222,6 +229,7 @@ describe("Agentic SupportOps operator workflow", () => {
 
     await selectIncident();
     await userEvent.click(screen.getByRole("button", { name: "Run deterministic" }));
+    await userEvent.click(await screen.findByText("Observed payload"));
     expect(await screen.findByText(/"used_percent": 94/)).toBeVisible();
 
     await userEvent.click(screen.getByRole("button", { name: /DNS resolution failure/ }));
@@ -247,6 +255,7 @@ describe("Agentic SupportOps operator workflow", () => {
     resolveInvestigation(
       jsonResponse({ incident_id: 1, catalog_id: "INC-001", steps: [], evidence: [deterministicEvidence] }),
     );
+    await userEvent.click(await screen.findByText("Observed payload"));
     expect(await screen.findByText(/"used_percent": 94/)).toBeVisible();
     expect(screen.getByText("Mode: deterministic")).toBeVisible();
     expect(screen.getByRole("button", { name: "Run deterministic" })).toBeEnabled();
@@ -353,6 +362,69 @@ describe("Agentic SupportOps operator workflow", () => {
     });
   });
 
+  it("surfaces Agents SDK as an alternative runtime over the same incident", async () => {
+    const fetchMock = installFetch({
+      aiConfigured: true,
+      post: async (url) => {
+        if (url.endsWith("/investigate-agent-sdk")) {
+          return jsonResponse({
+            ...actionableExecution,
+            investigation: {
+              ...actionableExecution.investigation,
+              mode: "agents_sdk",
+              result: { ...actionableExecution.investigation.result, proposed_action: null },
+            },
+          });
+        }
+        throw new Error(`Unexpected request: ${url}`);
+      },
+    });
+    render(<App />);
+
+    await selectIncident();
+    await userEvent.click(screen.getByRole("button", { name: "Run Agents SDK" }));
+
+    expect(await screen.findByText("Mode: agents_sdk")).toBeVisible();
+    expect(fetchMock.mock.calls.some(([url]) =>
+      String(url).endsWith("/investigate-agent-sdk")
+    )).toBe(true);
+  });
+
+  it("loads persisted investigation history as readable artifacts and timeline", async () => {
+    installFetch({
+      aiConfigured: true,
+      get: async (url) => {
+        if (url.endsWith("/investigation-runs")) {
+          return jsonResponse([actionableExecution.investigation]);
+        }
+        if (url.endsWith("/artifacts")) return jsonResponse(actionableExecution);
+        if (url.endsWith("/action-proposals")) return jsonResponse([pendingProposal]);
+        if (url.endsWith("/events")) {
+          return jsonResponse([{
+            id: 90,
+            investigation_id: 20,
+            runtime: "manual_responses",
+            event_type: "run_completed",
+            sequence: 1,
+            status: "completed",
+            timestamp: "2026-08-28T12:11:00Z",
+            metadata: {},
+          }]);
+        }
+        return undefined;
+      },
+    });
+    render(<App />);
+
+    await selectIncident();
+    await userEvent.click(await screen.findByRole("button", { name: /Responses API/ }));
+
+    expect(await screen.findByRole("heading", { name: "Operational timeline" })).toBeVisible();
+    expect(screen.getByText("run completed")).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Proposed Action" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Evidence" })).toBeVisible();
+  });
+
   it.each([
     ["Approve", "approved"],
     ["Reject", "rejected"],
@@ -378,7 +450,7 @@ describe("Agentic SupportOps operator workflow", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Run AI investigation" }));
 
     expect(await screen.findByRole("heading", { name: "Proposed Action" })).toBeVisible();
-    expect(screen.getByText("Action type:").closest("p")).toHaveTextContent("reset simulated application state");
+    expect(screen.getByText("Action type:").closest("p")).toHaveTextContent("Reset simulated application state");
     expect(screen.getByText("Supporting evidence:").closest("p")).toHaveTextContent("#10");
     expect(screen.getByText("Approval state:").closest("p")).toHaveTextContent("pending");
     expect(screen.queryByRole("button", { name: /execute/i })).not.toBeInTheDocument();
@@ -422,6 +494,7 @@ describe("Agentic SupportOps operator workflow", () => {
 
     resolveExecution(jsonResponse(completedExecution));
     expect((await screen.findByText("Execution status:")).closest("p")).toHaveTextContent("COMPLETED");
+    await userEvent.click(screen.getByText("Technical result"));
     expect(screen.getByText(/"current_state": "healthy"/)).toBeVisible();
     expect(screen.queryByRole("button", { name: /execute/i })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Verify outcome" })).toBeVisible();
@@ -460,6 +533,88 @@ describe("Agentic SupportOps operator workflow", () => {
     expect(screen.getByText("Application not found")).toBeVisible();
     expect(screen.queryByRole("button", { name: /execute approved/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Verify outcome" })).not.toBeInTheDocument();
+  });
+
+  it("presents OUTCOME_UNKNOWN as unsafe to retry and offers governed reconciliation", async () => {
+    const unknownExecution = {
+      ...completedExecution,
+      status: "outcome_unknown",
+      completed_at: null,
+      result: null,
+      completion_basis: null,
+      error: { code: "capability_outcome_unknown", message: "Outcome could not be acknowledged" },
+    };
+    installFetch({
+      aiConfigured: true,
+      get: async (url) => {
+        if (url.endsWith("/events")) {
+          return jsonResponse([{
+            id: 91,
+            investigation_id: 20,
+            runtime: "manual_responses",
+            event_type: "execution_attempt_outcome_unknown",
+            sequence: 5,
+            status: "outcome_unknown",
+            timestamp: "2026-08-28T12:14:02Z",
+            metadata: { attempt_id: 77, outcome_certainty: "unknown" },
+          }]);
+        }
+        if (url.endsWith("/reconciliation")) {
+          return jsonResponse({
+            id: 80,
+            attempt_id: 77,
+            execution_id: 50,
+            status: "desired_state_observed",
+            observer: "get_application_health",
+            expected_outcome: { state: "healthy" },
+            observed_outcome: { state: "healthy" },
+            error: null,
+            requested_at: "2026-08-28T12:15:00Z",
+            started_at: "2026-08-28T12:15:00Z",
+            completed_at: "2026-08-28T12:15:01Z",
+            is_stale: false,
+            recoverable: false,
+            recovery_block_reason: "reconciliation_not_running",
+          });
+        }
+        return undefined;
+      },
+      post: async (url) => {
+        if (url.endsWith("/investigate-ai")) return jsonResponse(actionableExecution);
+        if (url.endsWith("/action-proposals")) return jsonResponse(executableProposal, 201);
+        if (url.endsWith("/approve")) return jsonResponse({ ...executableProposal, approval_status: "approved" });
+        if (url.endsWith("/execute")) return jsonResponse(unknownExecution);
+        if (url.endsWith("/reconcile")) {
+          return jsonResponse({
+            id: 80,
+            attempt_id: 77,
+            execution_id: 50,
+            status: "desired_state_observed",
+            observer: "get_application_health",
+            expected_outcome: { state: "healthy" },
+            observed_outcome: { state: "healthy" },
+            error: null,
+            requested_at: "2026-08-28T12:15:00Z",
+            started_at: "2026-08-28T12:15:00Z",
+            completed_at: "2026-08-28T12:15:01Z",
+          });
+        }
+        throw new Error(`Unexpected request: ${url}`);
+      },
+    });
+    render(<App />);
+    await selectIncident();
+    await userEvent.click(await screen.findByRole("button", { name: "Run AI investigation" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Approve" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Execute approved action" }));
+
+    expect(await screen.findByText("Outcome certainty is unknown")).toBeVisible();
+    expect(screen.getByText(/automatic retry is unsafe/)).toBeVisible();
+    expect(screen.queryByRole("button", { name: /execute approved/i })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Reconcile observed state" }));
+    expect(await screen.findByRole("region", { name: "Reconciliation" })).toHaveTextContent(
+      "DESIRED STATE OBSERVED",
+    );
   });
 
   it.each([

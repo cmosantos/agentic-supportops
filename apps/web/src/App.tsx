@@ -16,7 +16,7 @@ type Incident = {
   created_at: string;
   updated_at: string;
 };
-type InvestigationOrigin = "deterministic" | "ai";
+type InvestigationOrigin = "deterministic" | "ai" | "agents_sdk";
 type Evidence = {
   id: number;
   incident_id: number;
@@ -75,12 +75,40 @@ type ActionExecution = {
   proposal_id: number;
   incident_id: number;
   capability_name: string;
-  status: "running" | "completed" | "failed";
+  status: "running" | "completed" | "failed" | "outcome_unknown";
   requested_at: string;
   started_at: string;
   completed_at: string | null;
   result: { data?: Record<string, unknown> } | null;
   error: { code: string; message: string } | null;
+  completion_basis: "acknowledged_result" | "reconciliation" | "legacy_recorded" | null;
+};
+type InvestigationEvent = {
+  id: number;
+  investigation_id: number;
+  runtime: "manual_responses" | "agents_sdk";
+  event_type: string;
+  sequence: number;
+  status: string | null;
+  timestamp: string;
+  metadata: Record<string, unknown>;
+};
+type InvestigationRun = AIExecution["investigation"];
+type Reconciliation = {
+  id: number;
+  attempt_id: number;
+  execution_id: number;
+  status: "running" | "desired_state_observed" | "undesired_state_observed" | "inconclusive";
+  observer: string;
+  expected_outcome: { state?: string };
+  observed_outcome: { state?: string } | null;
+  error: { code: string; message: string } | null;
+  requested_at: string;
+  started_at: string;
+  completed_at: string | null;
+  is_stale?: boolean;
+  recoverable?: boolean;
+  recovery_block_reason?: string | null;
 };
 type OutcomeVerification = {
   id: number;
@@ -134,7 +162,7 @@ type AIExecution = {
   evidence: Evidence[];
   steps: InvestigationStep[];
 };
-type InvestigationMode = "deterministic" | "ai";
+type InvestigationMode = "deterministic" | "ai" | "agents_sdk";
 type AIMetadata = { status: AIStatus; model: string };
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
@@ -165,6 +193,35 @@ function displayStatus(status: string): string {
   return status.replaceAll("_", " ");
 }
 
+function displayAction(action: string): string {
+  const labels: Record<string, string> = {
+    restart_simulated_service: "Restart simulated service",
+    unlock_simulated_user: "Unlock simulated user",
+    reset_simulated_application_state: "Reset simulated application state",
+  };
+  return labels[action] ?? displayStatus(action);
+}
+
+function formatTime(value: string | null | undefined): string {
+  if (!value) return "—";
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(new Date(value));
+}
+
+function toneFor(status: string): string {
+  if (["completed", "approved", "verified", "resolved", "desired_state_observed", "applied_acknowledged"].includes(status)) return "success";
+  if (["running", "investigating", "pending", "awaiting_approval"].includes(status)) return "progress";
+  if (["outcome_unknown", "unknown", "not_verified", "inconclusive", "keep_open"].includes(status)) return "warning";
+  if (["failed", "rejected", "undesired_state_observed"].includes(status)) return "danger";
+  return "neutral";
+}
+
+function StatusBadge({ status }: { status: string }) {
+  return <span className={`status-badge ${toneFor(status)}`}>{displayStatus(status).toUpperCase()}</span>;
+}
+
 export function App() {
   const [health, setHealth] = useState<Health | null>(null);
   const [unavailable, setUnavailable] = useState(false);
@@ -178,12 +235,18 @@ export function App() {
   const [aiConfigured, setAiConfigured] = useState(false);
   const [aiResult, setAiResult] = useState<AIResult | null>(null);
   const [aiMetadata, setAiMetadata] = useState<AIMetadata | null>(null);
+  const [investigationRuns, setInvestigationRuns] = useState<InvestigationRun[]>([]);
+  const [events, setEvents] = useState<InvestigationEvent[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
   const [actionProposal, setActionProposal] = useState<ActionProposal | null>(null);
   const [proposalError, setProposalError] = useState<string | null>(null);
   const [decidingProposal, setDecidingProposal] = useState(false);
   const [actionExecution, setActionExecution] = useState<ActionExecution | null>(null);
   const [executingAction, setExecutingAction] = useState(false);
   const [outcomeVerification, setOutcomeVerification] = useState<OutcomeVerification | null>(null);
+  const [attemptId, setAttemptId] = useState<number | null>(null);
+  const [reconciliation, setReconciliation] = useState<Reconciliation | null>(null);
+  const [reconciling, setReconciling] = useState(false);
   const [verifyingOutcome, setVerifyingOutcome] = useState(false);
   const [resolutionDecisions, setResolutionDecisions] = useState<IncidentResolutionDecision[]>([]);
   const [resolutionReason, setResolutionReason] = useState("");
@@ -245,11 +308,16 @@ export function App() {
     setSteps([]);
     setAiResult(null);
     setAiMetadata(null);
+    setInvestigationRuns([]);
+    setEvents([]);
+    setHistoryLoading(true);
     setActionProposal(null);
     setProposalError(null);
     setActionExecution(null);
     setExecutingAction(false);
     setOutcomeVerification(null);
+    setAttemptId(null);
+    setReconciliation(null);
     setVerifyingOutcome(false);
     setResolutionDecisions([]);
     setResolutionReason("");
@@ -267,6 +335,56 @@ export function App() {
         }
       })
       .catch(() => undefined);
+    void fetch(`${apiBaseUrl}/incidents/${reference}/investigation-runs`)
+      .then(async (response) => response.ok ? response.json() : [])
+      .then((runs: InvestigationRun[]) => {
+        if (selectionVersion === investigationVersion.current) {
+          setInvestigationRuns(runs);
+        }
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        if (selectionVersion === investigationVersion.current) setHistoryLoading(false);
+      });
+  }
+
+  async function loadRun(run: InvestigationRun) {
+    if (!selected) return;
+    const version = investigationVersion.current;
+    const reference = selected.catalog_id ?? selected.id;
+    setHistoryLoading(true);
+    setProposalError(null);
+    try {
+      const [artifactsResponse, eventsResponse, proposalsResponse] = await Promise.all([
+        fetch(`${apiBaseUrl}/incidents/${reference}/investigation-runs/${run.id}/artifacts`),
+        fetch(`${apiBaseUrl}/incidents/${reference}/investigation-runs/${run.id}/events`),
+        fetch(`${apiBaseUrl}/incidents/${reference}/investigation-runs/${run.id}/action-proposals`),
+      ]);
+      if (!artifactsResponse.ok || !eventsResponse.ok || !proposalsResponse.ok) {
+        throw new Error("Historical investigation details could not be loaded");
+      }
+      const artifacts: AIExecution = await artifactsResponse.json();
+      const historicalEvents: InvestigationEvent[] = await eventsResponse.json();
+      const proposals: ActionProposal[] = await proposalsResponse.json();
+      if (version !== investigationVersion.current) return;
+      setEvidence(artifacts.evidence);
+      setSteps(artifacts.steps);
+      setAiResult(artifacts.investigation.result);
+      setAiMetadata({ status: artifacts.investigation.status, model: artifacts.investigation.model });
+      setMode(artifacts.investigation.mode === "agents_sdk" ? "agents_sdk" : "ai");
+      setEvents(historicalEvents);
+      setActionProposal(proposals.at(-1) ?? null);
+      setActionExecution(null);
+      setOutcomeVerification(null);
+      setAttemptId(null);
+      setReconciliation(null);
+    } catch (error: unknown) {
+      if (version === investigationVersion.current) {
+        setProposalError(error instanceof Error ? error.message : "History loading failed");
+      }
+    } finally {
+      if (version === investigationVersion.current) setHistoryLoading(false);
+    }
   }
 
   async function runInvestigation(investigationMode: InvestigationMode) {
@@ -294,7 +412,11 @@ export function App() {
 
     try {
       const reference = selected.catalog_id ?? selected.id;
-      const endpoint = investigationMode === "ai" ? "investigate-ai" : "investigate";
+      const endpoint = investigationMode === "ai"
+        ? "investigate-ai"
+        : investigationMode === "agents_sdk"
+          ? "investigate-agent-sdk"
+          : "investigate";
       const response = await fetch(`${apiBaseUrl}/incidents/${reference}/${endpoint}`, {
         method: "POST",
         signal: controller.signal,
@@ -302,7 +424,7 @@ export function App() {
       if (!response.ok) throw new Error(await investigationErrorMessage(response));
       if (requestVersion !== investigationVersion.current) return;
 
-      if (investigationMode === "ai") {
+      if (investigationMode !== "deterministic") {
         const result: AIExecution = await response.json();
         if (requestVersion !== investigationVersion.current) return;
         setEvidence(result.evidence);
@@ -312,6 +434,19 @@ export function App() {
           status: result.investigation.status,
           model: result.investigation.model,
         });
+        setInvestigationRuns((current) => [
+          result.investigation,
+          ...current.filter((item) => item.id !== result.investigation.id),
+        ]);
+        void fetch(
+          `${apiBaseUrl}/incidents/${reference}/investigation-runs/${result.investigation.id}/events`,
+          { signal: controller.signal },
+        )
+          .then(async (eventResponse) => eventResponse.ok ? eventResponse.json() : [])
+          .then((items: InvestigationEvent[]) => {
+            if (requestVersion === investigationVersion.current) setEvents(items);
+          })
+          .catch(() => undefined);
         if (result.investigation.result?.proposed_action) {
           const proposalResponse = await fetch(
             `${apiBaseUrl}/incidents/${reference}/investigation-runs/${result.investigation.id}/action-proposals`,
@@ -385,6 +520,22 @@ export function App() {
       if (!response.ok) throw new Error(await investigationErrorMessage(response));
       const execution: ActionExecution = await response.json();
       setActionExecution(execution);
+      try {
+        const eventResponse = await fetch(
+          `${apiBaseUrl}/incidents/${reference}/investigation-runs/${actionProposal.investigation_id}/events`,
+        );
+        if (eventResponse.ok) {
+          const persistedEvents: InvestigationEvent[] = await eventResponse.json();
+          setEvents(persistedEvents);
+          const attemptEvent = [...persistedEvents].reverse().find((item) =>
+            typeof item.metadata.attempt_id === "number"
+          );
+          const persistedAttemptId = attemptEvent?.metadata.attempt_id;
+          if (typeof persistedAttemptId === "number") setAttemptId(persistedAttemptId);
+        }
+      } catch {
+        // Execution remains authoritative even when timeline hydration is unavailable.
+      }
       if (execution.status === "completed") {
         try {
           const verificationResponse = await fetch(
@@ -401,6 +552,30 @@ export function App() {
       setProposalError(error instanceof Error ? error.message : "Action execution failed");
     } finally {
       setExecutingAction(false);
+    }
+  }
+
+  async function reconcileUnknownAttempt(recover = false) {
+    if (!actionExecution || !attemptId || reconciling) return;
+    setReconciling(true);
+    setProposalError(null);
+    const suffix = recover ? "reconciliation/recover" : "reconcile";
+    try {
+      const response = await fetch(
+        `${apiBaseUrl}/action-executions/${actionExecution.id}/attempts/${attemptId}/${suffix}`,
+        { method: "POST" },
+      );
+      if (!response.ok) throw new Error(await investigationErrorMessage(response));
+      const result: Reconciliation = await response.json();
+      setReconciliation(result);
+      const operational = await fetch(
+        `${apiBaseUrl}/action-executions/${actionExecution.id}/attempts/${attemptId}/reconciliation`,
+      );
+      if (operational.ok) setReconciliation(await operational.json());
+    } catch (error: unknown) {
+      setProposalError(error instanceof Error ? error.message : "Reconciliation failed");
+    } finally {
+      setReconciling(false);
     }
   }
 
@@ -468,23 +643,54 @@ export function App() {
     }
   }
 
+  const physicalAttemptEvent = [...events].reverse().find((item) =>
+    ["execution_completed", "execution_failed", "execution_attempt_outcome_unknown"].includes(
+      item.event_type,
+    )
+  );
+  const outcomeCertainty = typeof physicalAttemptEvent?.metadata.outcome_certainty === "string"
+    ? physicalAttemptEvent.metadata.outcome_certainty
+    : actionExecution?.status === "completed"
+      ? "applied_acknowledged"
+      : actionExecution?.status === "failed"
+        ? "not_applied"
+        : actionExecution?.status === "outcome_unknown"
+          ? "unknown"
+          : null;
+  const currentResolution = outcomeVerification
+    ? resolutionDecisions.find((item) => item.verification_id === outcomeVerification.id)
+    : resolutionDecisions.at(-1);
+
   return (
     <main>
       <section className="shell">
-        <p className="eyebrow">IT Support &amp; Operations</p>
-        <h1>Agentic SupportOps</h1>
-        <p className="summary">Deterministic and model-driven incident investigation.</p>
-        <div className="health" aria-live="polite">
-          <span className={health ? "indicator online" : "indicator"} />
-          {health
-            ? `Backend online — ${health.service}`
-            : unavailable
-              ? "Backend unavailable"
-              : "Checking backend health…"}
-        </div>
-        <div className="workspace">
+        <header className="app-header">
           <div>
-            <h2>Incident catalog</h2>
+            <p className="eyebrow">Support operations console</p>
+            <h1>Agentic SupportOps</h1>
+            <p className="summary">Investigate incidents, govern remediation, and verify outcomes.</p>
+          </div>
+          <div className="system-status" aria-label="System status">
+            <div className="health" aria-live="polite">
+              <span className={health ? "indicator online" : "indicator"} />
+              {health
+                ? `Backend online — ${health.service}`
+                : unavailable
+                  ? "Backend unavailable"
+                  : "Checking backend health…"}
+            </div>
+            <span className="system-chip">Transport · HTTP API</span>
+            <span className={aiConfigured ? "system-chip available" : "system-chip"}>
+              AI · {aiConfigured ? "available" : "not configured"}
+            </span>
+          </div>
+        </header>
+        <div className="workspace">
+          <aside className="queue">
+            <div className="section-heading">
+              <div><p className="section-kicker">Active workload</p><h2>Incident queue</h2></div>
+              <span className="count">{incidents.length}</span>
+            </div>
             <div className="incident-list">
               {incidents.map((incident) => (
                 <button
@@ -492,21 +698,52 @@ export function App() {
                   key={incident.id}
                   onClick={() => selectIncident(incident)}
                 >
-                  <strong>{incident.catalog_id ?? `#${incident.id}`}</strong>
-                  <span>{incident.title}</span>
+                  <span className="incident-topline">
+                    <strong>{incident.catalog_id ?? `#${incident.id}`}</strong>
+                    <StatusBadge status={incident.priority} />
+                  </span>
+                  <span className="incident-title">{incident.title}</span>
+                  <span className="incident-meta">{incident.category} · {displayStatus(incident.status)}</span>
                 </button>
               ))}
             </div>
-          </div>
+          </aside>
           <div className="details">
             {selected ? (
               <>
-                <h2>{selected.title}</h2>
-                <p>{selected.description}</p>
-                <p><b>Incident status:</b> {selected.status.toUpperCase()}</p>
-                <p className="metadata">
-                  {selected.category} · {selected.priority} · {selected.affected_resource_id}
-                </p>
+                <header className="incident-header">
+                  <div>
+                    <p className="section-kicker">{selected.catalog_id ?? `Incident #${selected.id}`}</p>
+                    <h2>{selected.title}</h2>
+                    <p className="incident-description">{selected.description}</p>
+                  </div>
+                  <StatusBadge status={selected.status} />
+                </header>
+                <dl className="incident-facts">
+                  <div><dt>Severity</dt><dd><StatusBadge status={selected.priority} /></dd></div>
+                  <div><dt>Category</dt><dd>{selected.category}</dd></div>
+                  <div><dt>Affected resource</dt><dd>{selected.affected_resource_id ?? "Not specified"}</dd></div>
+                  <div><dt>Updated</dt><dd>{formatTime(selected.updated_at)}</dd></div>
+                </dl>
+                <p className="sr-only"><b>Incident status:</b> {selected.status.toUpperCase()}</p>
+                <section className="lifecycle" aria-label="Operational lifecycle">
+                  {[
+                    ["Investigation", aiMetadata?.status ?? (evidence.length ? "completed" : "not_started")],
+                    ["Proposal", actionProposal?.approval_status ?? "not_started"],
+                    ["Execution", actionExecution?.status ?? "not_started"],
+                    ["Verification", outcomeVerification?.status ?? "not_started"],
+                    ["Resolution", currentResolution?.decision ?? (selected.status === "resolved" ? "resolved" : "open")],
+                  ].map(([label, status]) => (
+                    <div className="lifecycle-step" key={label}>
+                      <span>{label}</span><StatusBadge status={status} />
+                    </div>
+                  ))}
+                </section>
+                <section className="panel investigation-controls" aria-labelledby="investigation-controls">
+                  <div className="panel-heading">
+                    <div><p className="section-kicker">Stage 1</p><h3 id="investigation-controls">Investigation runtimes</h3></div>
+                    <p>Alternative runtimes over the same governed read-only capabilities.</p>
+                  </div>
                 <div className="actions" aria-busy={investigating}>
                   <button
                     className="run"
@@ -528,6 +765,17 @@ export function App() {
                         ? "Run AI investigation"
                         : "AI unavailable"}
                   </button>
+                  <button
+                    className="run secondary"
+                    onClick={() => runInvestigation("agents_sdk")}
+                    disabled={investigating || !aiConfigured}
+                  >
+                    {investigating && mode === "agents_sdk"
+                      ? "Running Agents SDK…"
+                      : aiConfigured
+                        ? "Run Agents SDK"
+                        : "Agents SDK unavailable"}
+                  </button>
                 </div>
                 {investigating && (
                   <p className="running" role="status">
@@ -536,8 +784,30 @@ export function App() {
                 )}
                 {mode && !investigating && <p className="mode">Mode: {mode}</p>}
                 {investigationError && <p className="error">{investigationError}</p>}
+                </section>
+                <section className="panel history-panel" aria-labelledby="investigation-history">
+                  <div className="panel-heading">
+                    <div><p className="section-kicker">Persisted record</p><h3 id="investigation-history">Investigation history</h3></div>
+                    <span className="muted">{historyLoading ? "Loading…" : `${investigationRuns.length} runs`}</span>
+                  </div>
+                  {investigationRuns.length === 0 && !historyLoading ? (
+                    <p className="empty-state">No model investigation runs have been recorded for this incident.</p>
+                  ) : (
+                    <div className="run-history">
+                      {investigationRuns.map((run) => (
+                        <button className="history-item" key={run.id} onClick={() => loadRun(run)}>
+                          <span>
+                            <strong>{run.mode === "agents_sdk" ? "Agents SDK" : "Responses API"}</strong>
+                            <small>{formatTime(run.created_at)}</small>
+                          </span>
+                          <StatusBadge status={run.status} />
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </section>
                 {aiResult && (
-                  <article className="diagnosis">
+                  <article className="panel diagnosis">
                     <div className="diagnosis-heading">
                       <strong>Investigation assessment</strong>
                       {aiMetadata && (
@@ -575,16 +845,26 @@ export function App() {
                     )}
                   </article>
                 )}
-                {proposalError && <p className="error">{proposalError}</p>}
+                {proposalError && <p className="error error-banner">{proposalError}</p>}
                 {actionProposal && (
-                  <article className="diagnosis" aria-labelledby="proposed-action">
-                    <h3 id="proposed-action">Proposed Action</h3>
-                    <p><b>Action type:</b> {displayStatus(actionProposal.action_type)}</p>
+                  <article className="panel proposal-panel" aria-labelledby="proposed-action">
+                    <div className="panel-heading">
+                      <div><p className="section-kicker">AI proposes · Human authorizes</p><h3 id="proposed-action">Proposed Action</h3></div>
+                      <StatusBadge status={actionProposal.approval_status} />
+                    </div>
+                    <p><b>Action type:</b> {displayAction(actionProposal.action_type)}</p>
                     <p><b>Target:</b> {actionProposal.target}</p>
                     <p><b>Rationale:</b> {actionProposal.rationale}</p>
                     <p><b>Risk level:</b> {actionProposal.risk_level}</p>
                     <p><b>Supporting evidence:</b> {actionProposal.supporting_evidence_ids.map((id) => `#${id}`).join(", ")}</p>
                     <p><b>Approval state:</b> {displayStatus(actionProposal.approval_status)}</p>
+                    {Object.keys(actionProposal.parameters).length > 0 && (
+                      <dl className="parameter-list">
+                        {Object.entries(actionProposal.parameters).map(([key, value]) => (
+                          <div key={key}><dt>{displayStatus(key)}</dt><dd>{String(value)}</dd></div>
+                        ))}
+                      </dl>
+                    )}
                     {actionProposal.approval_status === "pending" && (
                       <div className="actions">
                         <button disabled={decidingProposal} onClick={() => decideActionProposal("approve")}>Approve</button>
@@ -592,7 +872,6 @@ export function App() {
                       </div>
                     )}
                     {actionProposal.approval_status === "approved" &&
-                      actionProposal.action_type === "restart_simulated_service" &&
                       !actionExecution && (
                         <div className="actions" aria-busy={executingAction}>
                           <button disabled={executingAction} onClick={executeApprovedAction}>
@@ -601,14 +880,48 @@ export function App() {
                         </div>
                       )}
                     {actionExecution && (
-                      <section className="result-section" aria-label="Execution result">
-                        <p><b>Capability:</b> {displayStatus(actionExecution.capability_name)}</p>
+                      <section className="execution-card" aria-label="Execution result">
+                        <div className="panel-heading"><h4>Controlled execution</h4><StatusBadge status={actionExecution.status} /></div>
+                        <p><b>Capability:</b> {displayAction(actionExecution.capability_name)}</p>
                         <p><b>Execution status:</b> {actionExecution.status.toUpperCase()}</p>
+                        {actionExecution.completion_basis && <p><b>Completion basis:</b> {displayStatus(actionExecution.completion_basis)}</p>}
+                        {outcomeCertainty && (
+                          <div className="attempt-summary">
+                            <span>Physical attempt</span><StatusBadge status={outcomeCertainty} />
+                            {attemptId && <small>Attempt #{attemptId}</small>}
+                          </div>
+                        )}
                         {actionExecution.result?.data && (
-                          <pre>{JSON.stringify(actionExecution.result.data, null, 2)}</pre>
+                          <details><summary>Technical result</summary><pre>{JSON.stringify(actionExecution.result.data, null, 2)}</pre></details>
                         )}
                         {actionExecution.error && (
                           <p className="error">{actionExecution.error.message}</p>
+                        )}
+                        {actionExecution.status === "outcome_unknown" && (
+                          <div className="unknown-outcome">
+                            <strong>Outcome certainty is unknown</strong>
+                            <p>The mutation may have started, so automatic retry is unsafe.</p>
+                            {attemptId ? (
+                              <button disabled={reconciling || Boolean(reconciliation)} onClick={() => reconcileUnknownAttempt()}>
+                                {reconciling ? "Reconciling…" : "Reconcile observed state"}
+                              </button>
+                            ) : <p className="muted">Attempt metadata is not yet available.</p>}
+                          </div>
+                        )}
+                      </section>
+                    )}
+                    {reconciliation && (
+                      <section className="result-section reconciliation-card" aria-label="Reconciliation">
+                        <div className="panel-heading"><h4>Reconciliation</h4><StatusBadge status={reconciliation.status} /></div>
+                        <p><b>Observer:</b> {displayStatus(reconciliation.observer)}</p>
+                        <p><b>Expected:</b> {reconciliation.expected_outcome.state?.toUpperCase() ?? "UNKNOWN"}</p>
+                        {reconciliation.observed_outcome?.state && <p><b>Observed:</b> {reconciliation.observed_outcome.state.toUpperCase()}</p>}
+                        {typeof reconciliation.is_stale === "boolean" && <p><b>Stale:</b> {reconciliation.is_stale ? "Yes" : "No"}</p>}
+                        {reconciliation.recovery_block_reason && <p><b>Recovery block:</b> {displayStatus(reconciliation.recovery_block_reason)}</p>}
+                        {reconciliation.recoverable && (
+                          <button disabled={reconciling} onClick={() => reconcileUnknownAttempt(true)}>
+                            {reconciling ? "Recovering…" : "Recover stale reconciliation"}
+                          </button>
                         )}
                       </section>
                     )}
@@ -620,8 +933,11 @@ export function App() {
                       </div>
                     )}
                     {outcomeVerification && (
-                      <section className="result-section" aria-label="Outcome verification">
-                        <h4>Verification</h4>
+                      <section className="result-section verification-card" aria-label="Outcome verification">
+                        <div className="panel-heading">
+                          <div><h4>Independent verification</h4><small>New read-only observation of current simulated state</small></div>
+                          <StatusBadge status={outcomeVerification.status} />
+                        </div>
                         <p><b>Verification status:</b> {displayStatus(outcomeVerification.status).toUpperCase()}</p>
                         <p><b>Expected:</b> {outcomeVerification.expected_outcome.state?.toUpperCase() ?? "UNKNOWN"}</p>
                         {outcomeVerification.observed_outcome?.state && (
@@ -641,8 +957,11 @@ export function App() {
                     {outcomeVerification?.status === "verified" &&
                       selected.status !== "resolved" &&
                       !resolutionDecisions.some((item) => item.verification_id === outcomeVerification.id) && (
-                        <section className="result-section" aria-label="Resolution review">
-                          <h4>Resolution Review</h4>
+                        <section className="result-section resolution-card" aria-label="Resolution review">
+                          <div className="panel-heading">
+                            <div><h4>Resolution Review</h4><small>Verification does not resolve the incident automatically.</small></div>
+                            <StatusBadge status="open" />
+                          </div>
                           <label htmlFor="resolution-reason">Reason</label>
                           <textarea
                             id="resolution-reason"
@@ -666,7 +985,7 @@ export function App() {
                   </article>
                 )}
                 {resolutionDecisions.length > 0 && (
-                  <section className="result-section" aria-label="Resolution history">
+                  <section className="panel" aria-label="Resolution history">
                     <h3>Resolution History</h3>
                     {resolutionDecisions.map((decision) => (
                       <article key={decision.id}>
@@ -678,7 +997,7 @@ export function App() {
                   </section>
                 )}
                 {steps.length > 0 && (
-                  <section className="result-section" aria-labelledby="investigation-steps">
+                  <section className="panel" aria-labelledby="investigation-steps">
                     <h3 id="investigation-steps">Investigation</h3>
                     <ul>
                       {steps.map((step) => (
@@ -688,20 +1007,47 @@ export function App() {
                   </section>
                 )}
                 {evidence.length > 0 && (
-                  <section className="result-section" aria-labelledby="investigation-evidence">
-                    <h3 id="investigation-evidence">Evidence</h3>
+                  <section className="panel evidence-panel" aria-labelledby="investigation-evidence">
+                    <div className="panel-heading">
+                      <div><p className="section-kicker">Factual observations</p><h3 id="investigation-evidence">Evidence</h3></div>
+                      <span className="count">{evidence.length}</span>
+                    </div>
                     {evidence.map((item) => (
                       <article key={item.id}>
                         <strong>#{item.id} · {item.source}</strong>
                         <small>{item.resource}</small>
-                        <pre>{JSON.stringify(item.payload, null, 2)}</pre>
+                        <details><summary>Observed payload</summary><pre>{JSON.stringify(item.payload, null, 2)}</pre></details>
                       </article>
                     ))}
                   </section>
                 )}
+                {events.length > 0 && (
+                  <section className="panel timeline-panel" aria-labelledby="operational-timeline">
+                    <div className="panel-heading">
+                      <div><p className="section-kicker">Persisted lifecycle</p><h3 id="operational-timeline">Operational timeline</h3></div>
+                      <span className="count">{events.length}</span>
+                    </div>
+                    <ol className="timeline">
+                      {events.map((event) => (
+                        <li key={event.id}>
+                          <span className={`timeline-marker ${toneFor(event.status ?? event.event_type)}`} />
+                          <div>
+                            <strong>{displayStatus(event.event_type)}</strong>
+                            <small>{formatTime(event.timestamp)} · {displayStatus(event.runtime)}</small>
+                          </div>
+                          {event.status && <StatusBadge status={event.status} />}
+                        </li>
+                      ))}
+                    </ol>
+                  </section>
+                )}
               </>
             ) : (
-              <p>Select an incident to inspect it.</p>
+              <div className="empty-selection">
+                <span>01</span>
+                <h2>Select an incident</h2>
+                <p>Choose an item from the queue to review its operational lifecycle.</p>
+              </div>
             )}
           </div>
         </div>
