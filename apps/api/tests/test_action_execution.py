@@ -79,6 +79,14 @@ def execute_url(investigation_id: int, proposal_id: int) -> str:
     return f"{proposal_url(investigation_id)}/{proposal_id}/execute"
 
 
+def execution_lookup_url(investigation_id: int, proposal_id: int) -> str:
+    return f"{proposal_url(investigation_id)}/{proposal_id}/execution"
+
+
+def canonical_attempt_url(execution_id: int) -> str:
+    return f"/action-executions/{execution_id}/attempt"
+
+
 @pytest.fixture
 def execution_context(
     tmp_path, monkeypatch: pytest.MonkeyPatch

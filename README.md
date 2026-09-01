@@ -82,6 +82,8 @@ AI Investigator -> Proposal -> Human Decision -> APPROVED only
 
 Human approval does not give the AI unrestricted tool access. `restart_simulated_service`, `unlock_simulated_user`, and `reset_simulated_application_state` are registered for controlled execution but excluded from investigation schemas and the MCP allowlist. The execute endpoint accepts no capability, target, or argument body: those values come from the persisted proposal. All three mutations affect only the deterministic local Contoso simulation, and no model is called during execution.
 
+The adjacent execution lookup endpoint returns the canonical execution already associated with that proposal, or `404` when none exists. It validates the incident, investigation, and proposal ownership chain and performs no capability invocation, retry, event append, lease/timestamp update, verification, or reconciliation.
+
 SQLite enforces one `action_executions` row per proposal and one canonical physical attempt. The attempt records whether invocation started, its `failure_cause`, and its `outcome_certainty`. A known pre-mutation rejection is `NOT_APPLIED`; a timeout, acknowledgement loss, invalid result, or interruption after invocation is `UNKNOWN` and moves the execution to `OUTCOME_UNKNOWN`. Unknown mutation outcome is never automatically retried. The system reconciles by observing governed read-only state.
 
 ### Explicit recovery and reconciliation
@@ -101,6 +103,10 @@ Each attempt has at most one canonical reconciliation. The server derives its re
 Recovery is explicit and only claims a canonical `RUNNING` reconciliation after `ACTION_EXECUTION_RECONCILIATION_STALE_AFTER_SECONDS`. A SQLite compare-and-set renews its lease before one new read-only observation. It creates neither an attempt nor another reconciliation. A crash before observation becomes recoverable after a later stale window; a crash after observation but before terminal persistence may cause a future recovery to observe again. This is safe because read retry is not mutation retry, and the application does not claim artificial exactly-once semantics.
 
 `GET /action-executions/{execution_id}/attempts/{attempt_id}/reconciliation` returns persisted reconciliation state plus derived `is_stale`, `recoverable`, and typed `recovery_block_reason`. It never observes, recovers, renews a lease, creates events, or changes state. The GET is advisory; the explicit recovery POST always revalidates eligibility.
+
+The operator UI discovers attempt #1 through the side-effect-free canonical-attempt GET, then reads the reconciliation view. It exposes reconciliation only after an explicit click, never retries the mutation, and reports stale recovery eligibility without starting recovery.
+
+The Action Execution area also presents an Operational Execution Timeline from `GET /action-executions/{execution_id}/timeline`. It is a chronological, read-only projection of the existing persisted audit events for that execution, including attempt, stale assessment, reconciliation, verification, and related human resolution facts when they were actually recorded. It does not infer missing history or alter lifecycle state.
 
 ## 🔎 Post-execution outcome verification
 
@@ -311,6 +317,8 @@ FastAPI exposes the complete interactive contract at `/docs`.
 | Run history | `GET /incidents/{incident_id}/investigation-runs?runtime=manual_responses` |
 | Event history | `GET /incidents/{incident_id}/investigation-runs/{run_id}/events` |
 | Controlled execution | `POST /incidents/{incident_id}/investigation-runs/{run_id}/action-proposals/{proposal_id}/execute` |
+| Read proposal execution | `GET /incidents/{incident_id}/investigation-runs/{run_id}/action-proposals/{proposal_id}/execution` |
+| Read canonical attempt | `GET /action-executions/{execution_id}/attempt` |
 | Assess stale attempt | `POST /action-executions/{execution_id}/attempts/{attempt_id}/stale-assessment` |
 | Reconcile unknown outcome | `POST /action-executions/{execution_id}/attempts/{attempt_id}/reconcile` |
 | Recover stale reconciliation | `POST /action-executions/{execution_id}/attempts/{attempt_id}/reconciliation/recover` |

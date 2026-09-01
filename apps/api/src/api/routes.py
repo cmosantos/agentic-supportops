@@ -21,9 +21,11 @@ from domain.action_proposal import (
     ActionRejection,
 )
 from domain.action_execution import (
+    ActionExecutionAttemptRead,
     ActionExecutionRead,
     ActionExecutionStaleAssessmentRead,
 )
+from domain.action_execution_timeline import ActionExecutionTimelineEntry
 from domain.action_execution_reconciliation import (
     ActionExecutionReconciliationOperationalRead,
     ActionExecutionReconciliationRead,
@@ -37,6 +39,9 @@ from repositories.action_proposal_repository import (
     InvalidApprovalTransitionError,
 )
 from repositories.action_execution_repository import ActionExecutionRepository
+from repositories.action_execution_timeline_repository import (
+    ActionExecutionTimelineRepository,
+)
 from repositories.action_execution_reconciliation_repository import (
     ActionExecutionReconciliationRepository,
 )
@@ -56,13 +61,19 @@ from services.action_proposal_service import (
     InvalidActionTypeError,
 )
 from services.action_execution_service import (
+    ActionExecutionAttemptNotFoundError,
     ActionExecutionNotApprovedError,
     ActionExecutionNotFoundError,
+    ActionExecutionQueryService,
     ActionExecutionService,
 )
 from services.action_execution_recovery_service import (
     ActionExecutionRecoveryError,
     ActionExecutionRecoveryService,
+)
+from services.action_execution_timeline_service import (
+    ActionExecutionTimelineNotFoundError,
+    ActionExecutionTimelineService,
 )
 from services.action_execution_reconciliation_service import (
     ActionExecutionReconciliationError,
@@ -520,6 +531,68 @@ def execute_action_proposal(
     except ExecutionPolicyDeniedError as error:
         raise _proposal_error(
             status.HTTP_403_FORBIDDEN, "execution_policy_denied", error
+        )
+
+
+@router.get(
+    "/incidents/{incident_id}/investigation-runs/{investigation_id}/action-proposals/{proposal_id}/execution",
+    response_model=ActionExecutionRead,
+)
+def get_action_proposal_execution(
+    incident_id: str,
+    investigation_id: int,
+    proposal_id: int,
+    session: DatabaseSession,
+) -> ActionExecutionRead:
+    investigation = _investigation_or_404(incident_id, investigation_id, session)
+    try:
+        return ActionExecutionQueryService(
+            ActionExecutionRepository(session)
+        ).get_for_proposal(
+            investigation.incident_id, investigation.id, proposal_id
+        )
+    except ActionExecutionNotFoundError as error:
+        raise _proposal_error(
+            status.HTTP_404_NOT_FOUND, "action_execution_not_found", error
+        )
+
+
+@router.get(
+    "/action-executions/{execution_id}/attempt",
+    response_model=ActionExecutionAttemptRead,
+)
+def get_action_execution_canonical_attempt(
+    execution_id: int,
+    session: DatabaseSession,
+) -> ActionExecutionAttemptRead:
+    repository = ActionExecutionRepository(session)
+    try:
+        return ActionExecutionQueryService(repository).get_canonical_attempt(execution_id)
+    except ActionExecutionNotFoundError as error:
+        raise _proposal_error(
+            status.HTTP_404_NOT_FOUND, "action_execution_not_found", error
+        )
+    except ActionExecutionAttemptNotFoundError as error:
+        raise _proposal_error(
+            status.HTTP_404_NOT_FOUND, "execution_attempt_not_found", error
+        )
+
+
+@router.get(
+    "/action-executions/{execution_id}/timeline",
+    response_model=list[ActionExecutionTimelineEntry],
+)
+def get_action_execution_timeline(
+    execution_id: int,
+    session: DatabaseSession,
+) -> list[ActionExecutionTimelineEntry]:
+    try:
+        return ActionExecutionTimelineService(
+            ActionExecutionTimelineRepository(session)
+        ).get(execution_id)
+    except ActionExecutionTimelineNotFoundError as error:
+        raise _proposal_error(
+            status.HTTP_404_NOT_FOUND, "action_execution_not_found", error
         )
 
 

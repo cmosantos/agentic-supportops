@@ -79,7 +79,14 @@ type ActionExecution = {
   requested_at: string;
   started_at: string;
   completed_at: string | null;
-  result: { data?: Record<string, unknown> } | null;
+  result: {
+    data?: {
+      target?: string;
+      previous_state?: string;
+      current_state?: string;
+      restarted?: boolean;
+    };
+  } | null;
   error: { code: string; message: string } | null;
   completion_basis: "acknowledged_result" | "reconciliation" | "legacy_recorded" | null;
 };
@@ -134,6 +141,15 @@ type IncidentResolutionDecision = {
   reason: string | null;
   decided_at: string;
 };
+type ActionExecutionTimelineEntry = {
+  timestamp: string;
+  event_type: string;
+  execution_id: number;
+  attempt_id: number | null;
+  status: string | null;
+  description: string;
+  reason: string | null;
+};
 type Investigation = {
   incident_id: number;
   catalog_id: string | null;
@@ -164,6 +180,9 @@ type AIExecution = {
 };
 type InvestigationMode = "deterministic" | "ai" | "agents_sdk";
 type AIMetadata = { status: AIStatus; model: string };
+type ExecutionLookupStatus = "idle" | "loading" | "not_found" | "found" | "error";
+type ReconciliationLookupStatus = "idle" | "loading" | "not_found" | "found" | "error";
+type TimelineLookupStatus = "idle" | "loading" | "loaded" | "error";
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
 
@@ -242,7 +261,12 @@ export function App() {
   const [proposalError, setProposalError] = useState<string | null>(null);
   const [decidingProposal, setDecidingProposal] = useState(false);
   const [actionExecution, setActionExecution] = useState<ActionExecution | null>(null);
+  const [executionLookupStatus, setExecutionLookupStatus] = useState<ExecutionLookupStatus>("idle");
   const [executingAction, setExecutingAction] = useState(false);
+  const [actionExecutionAttempt, setActionExecutionAttempt] = useState<ActionExecutionAttempt | null>(null);
+  const [reconciliation, setReconciliation] = useState<ActionExecutionReconciliation | null>(null);
+  const [reconciliationLookupStatus, setReconciliationLookupStatus] = useState<ReconciliationLookupStatus>("idle");
+  const [reconciling, setReconciling] = useState(false);
   const [outcomeVerification, setOutcomeVerification] = useState<OutcomeVerification | null>(null);
   const [attemptId, setAttemptId] = useState<number | null>(null);
   const [reconciliation, setReconciliation] = useState<Reconciliation | null>(null);
@@ -251,8 +275,87 @@ export function App() {
   const [resolutionDecisions, setResolutionDecisions] = useState<IncidentResolutionDecision[]>([]);
   const [resolutionReason, setResolutionReason] = useState("");
   const [decidingResolution, setDecidingResolution] = useState(false);
+  const [executionTimeline, setExecutionTimeline] = useState<ActionExecutionTimelineEntry[]>([]);
+  const [timelineLookupStatus, setTimelineLookupStatus] = useState<TimelineLookupStatus>("idle");
   const investigationRequest = useRef<AbortController | null>(null);
   const investigationVersion = useRef(0);
+  const proposalDecisionInFlight = useRef(false);
+  const executionRequestInFlight = useRef(false);
+  const reconciliationRequestInFlight = useRef(false);
+
+  async function loadExecutionTimeline(
+    executionId: number,
+    signal?: AbortSignal,
+    requestVersion?: number,
+  ) {
+    const isCurrent = () => requestVersion === undefined || requestVersion === investigationVersion.current;
+    setTimelineLookupStatus("loading");
+    try {
+      const response = await fetch(
+        `${apiBaseUrl}/action-executions/${executionId}/timeline`,
+        { signal },
+      );
+      if (!isCurrent()) return;
+      if (!response.ok) {
+        setExecutionTimeline([]);
+        setTimelineLookupStatus("error");
+        return;
+      }
+      setExecutionTimeline(await response.json());
+      setTimelineLookupStatus("loaded");
+    } catch {
+      if (signal?.aborted || !isCurrent()) return;
+      setExecutionTimeline([]);
+      setTimelineLookupStatus("error");
+    }
+  }
+
+  async function loadReconciliationContext(
+    execution: ActionExecution,
+    signal?: AbortSignal,
+    requestVersion?: number,
+  ) {
+    const isCurrent = () => requestVersion === undefined || requestVersion === investigationVersion.current;
+    setActionExecutionAttempt(null);
+    setReconciliation(null);
+    setReconciliationLookupStatus("idle");
+    if (
+      execution.status !== "outcome_unknown" &&
+      execution.completion_basis !== "reconciliation"
+    ) return;
+    setReconciliationLookupStatus("loading");
+    try {
+      const attemptResponse = await fetch(`${apiBaseUrl}/action-executions/${execution.id}/attempt`, { signal });
+      if (!isCurrent()) return;
+      if (!attemptResponse.ok) {
+        setReconciliationLookupStatus("error");
+        setProposalError(await investigationErrorMessage(attemptResponse));
+        return;
+      }
+      const attempt: ActionExecutionAttempt = await attemptResponse.json();
+      setActionExecutionAttempt(attempt);
+      const reconciliationResponse = await fetch(
+        `${apiBaseUrl}/action-executions/${execution.id}/attempts/${attempt.id}/reconciliation`,
+        { signal },
+      );
+      if (!isCurrent()) return;
+      if (reconciliationResponse.status === 404) {
+        setReconciliationLookupStatus("not_found");
+        return;
+      }
+      if (!reconciliationResponse.ok) {
+        setReconciliationLookupStatus("error");
+        setProposalError(await investigationErrorMessage(reconciliationResponse));
+        return;
+      }
+      setReconciliation(await reconciliationResponse.json());
+      setReconciliationLookupStatus("found");
+    } catch {
+      if (signal?.aborted || !isCurrent()) return;
+      setReconciliationLookupStatus("error");
+      setProposalError("Unable to load persisted reconciliation state.");
+    }
+  }
 
   useEffect(() => {
     const controller = new AbortController();
@@ -314,7 +417,12 @@ export function App() {
     setActionProposal(null);
     setProposalError(null);
     setActionExecution(null);
+    setExecutionLookupStatus("idle");
     setExecutingAction(false);
+    setActionExecutionAttempt(null);
+    setReconciliation(null);
+    setReconciliationLookupStatus("idle");
+    setReconciling(false);
     setOutcomeVerification(null);
     setAttemptId(null);
     setReconciliation(null);
@@ -322,6 +430,8 @@ export function App() {
     setResolutionDecisions([]);
     setResolutionReason("");
     setDecidingResolution(false);
+    setExecutionTimeline([]);
+    setTimelineLookupStatus("idle");
     setMode(null);
     setInvestigationError(null);
     setInvestigating(false);
@@ -402,13 +512,52 @@ export function App() {
     setActionProposal(null);
     setProposalError(null);
     setActionExecution(null);
+    setExecutionLookupStatus("idle");
     setExecutingAction(false);
+    setActionExecutionAttempt(null);
+    setReconciliation(null);
+    setReconciliationLookupStatus("idle");
+    setReconciling(false);
     setOutcomeVerification(null);
     setVerifyingOutcome(false);
     setResolutionDecisions([]);
     setResolutionReason("");
     setDecidingResolution(false);
+    setExecutionTimeline([]);
+    setTimelineLookupStatus("idle");
     setMode(investigationMode);
+
+    async function loadProposalAndExecution(proposal: ActionProposal, reference: string | number) {
+      if (requestVersion !== investigationVersion.current) return;
+      setActionProposal(proposal);
+      setActionExecution(null);
+      setExecutionLookupStatus("loading");
+      const executionUrl = `${apiBaseUrl}/incidents/${reference}/investigation-runs/${proposal.investigation_id}/action-proposals/${proposal.id}/execution`;
+      try {
+        const executionResponse = await fetch(executionUrl, { signal: controller.signal });
+        if (requestVersion !== investigationVersion.current) return;
+        if (executionResponse.status === 404) {
+          setExecutionLookupStatus("not_found");
+          return;
+        }
+        if (!executionResponse.ok) {
+          setExecutionLookupStatus("error");
+          setProposalError(await investigationErrorMessage(executionResponse));
+          return;
+        }
+        const execution: ActionExecution = await executionResponse.json();
+        setActionExecution(execution);
+        setExecutionLookupStatus("found");
+        await Promise.all([
+          loadReconciliationContext(execution, controller.signal, requestVersion),
+          loadExecutionTimeline(execution.id, controller.signal, requestVersion),
+        ]);
+      } catch (error: unknown) {
+        if (controller.signal.aborted || requestVersion !== investigationVersion.current) return;
+        setExecutionLookupStatus("error");
+        setProposalError("Unable to load persisted execution state.");
+      }
+    }
 
     try {
       const reference = selected.catalog_id ?? selected.id;
@@ -448,19 +597,29 @@ export function App() {
           })
           .catch(() => undefined);
         if (result.investigation.result?.proposed_action) {
-          const proposalResponse = await fetch(
-            `${apiBaseUrl}/incidents/${reference}/investigation-runs/${result.investigation.id}/action-proposals`,
-            {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify(result.investigation.result.proposed_action),
-              signal: controller.signal,
-            },
-          );
+          const proposalUrl = `${apiBaseUrl}/incidents/${reference}/investigation-runs/${result.investigation.id}/action-proposals`;
+          const persistedResponse = await fetch(proposalUrl, { signal: controller.signal });
+          if (requestVersion !== investigationVersion.current) return;
+          if (!persistedResponse.ok) {
+            setProposalError(await investigationErrorMessage(persistedResponse));
+            return;
+          }
+          const persistedProposals: ActionProposal[] = await persistedResponse.json();
+          if (persistedProposals.length > 0) {
+            await loadProposalAndExecution(persistedProposals[0], reference);
+            return;
+          }
+          const proposalResponse = await fetch(proposalUrl, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(result.investigation.result.proposed_action),
+            signal: controller.signal,
+          });
+          if (requestVersion !== investigationVersion.current) return;
           if (!proposalResponse.ok) {
             setProposalError(await investigationErrorMessage(proposalResponse));
           } else if (requestVersion === investigationVersion.current) {
-            setActionProposal(await proposalResponse.json());
+            await loadProposalAndExecution(await proposalResponse.json(), reference);
           }
         }
       } else {
@@ -483,7 +642,8 @@ export function App() {
   }
 
   async function decideActionProposal(decision: "approve" | "reject") {
-    if (!selected || !actionProposal || decidingProposal) return;
+    if (!selected || !actionProposal || proposalDecisionInFlight.current) return;
+    proposalDecisionInFlight.current = true;
     setDecidingProposal(true);
     setProposalError(null);
     const reference = selected.catalog_id ?? selected.id;
@@ -503,12 +663,14 @@ export function App() {
     } catch (error: unknown) {
       setProposalError(error instanceof Error ? error.message : "Proposal decision failed");
     } finally {
+      proposalDecisionInFlight.current = false;
       setDecidingProposal(false);
     }
   }
 
   async function executeApprovedAction() {
-    if (!selected || !actionProposal || executingAction || actionExecution) return;
+    if (!selected || !actionProposal || executionRequestInFlight.current || actionExecution) return;
+    executionRequestInFlight.current = true;
     setExecutingAction(true);
     setProposalError(null);
     const reference = selected.catalog_id ?? selected.id;
@@ -551,6 +713,7 @@ export function App() {
     } catch (error: unknown) {
       setProposalError(error instanceof Error ? error.message : "Action execution failed");
     } finally {
+      executionRequestInFlight.current = false;
       setExecutingAction(false);
     }
   }
@@ -595,6 +758,7 @@ export function App() {
       );
       if (!response.ok) throw new Error(await investigationErrorMessage(response));
       setOutcomeVerification(await response.json());
+      await loadExecutionTimeline(actionExecution.id);
     } catch (error: unknown) {
       setProposalError(error instanceof Error ? error.message : "Outcome verification failed");
     } finally {
@@ -636,6 +800,7 @@ export function App() {
           item.id === resolution.incident_id ? { ...item, status: "resolved" } : item
         ));
       }
+      if (actionExecution) await loadExecutionTimeline(actionExecution.id);
     } catch (error: unknown) {
       setProposalError(error instanceof Error ? error.message : "Resolution decision failed");
     } finally {
@@ -854,6 +1019,10 @@ export function App() {
                     </div>
                     <p><b>Action type:</b> {displayAction(actionProposal.action_type)}</p>
                     <p><b>Target:</b> {actionProposal.target}</p>
+                    <div className="result-section">
+                      <b>Bounded parameters</b>
+                      <pre>{JSON.stringify(actionProposal.parameters, null, 2)}</pre>
+                    </div>
                     <p><b>Rationale:</b> {actionProposal.rationale}</p>
                     <p><b>Risk level:</b> {actionProposal.risk_level}</p>
                     <p><b>Supporting evidence:</b> {actionProposal.supporting_evidence_ids.map((id) => `#${id}`).join(", ")}</p>
@@ -866,19 +1035,30 @@ export function App() {
                       </dl>
                     )}
                     {actionProposal.approval_status === "pending" && (
-                      <div className="actions">
-                        <button disabled={decidingProposal} onClick={() => decideActionProposal("approve")}>Approve</button>
+                      <div className="actions" aria-busy={decidingProposal}>
+                        <button disabled={decidingProposal} onClick={() => decideActionProposal("approve")}>
+                          {decidingProposal ? "Recording decision…" : "Approve"}
+                        </button>
                         <button disabled={decidingProposal} onClick={() => decideActionProposal("reject")}>Reject</button>
                       </div>
                     )}
                     {actionProposal.approval_status === "approved" &&
                       !actionExecution && (
-                        <div className="actions" aria-busy={executingAction}>
-                          <button disabled={executingAction} onClick={executeApprovedAction}>
-                            {executingAction ? "Executing…" : "Execute approved action"}
-                          </button>
-                        </div>
+                        <section className="result-section" aria-label="Approved action execution">
+                          <p className="human-control">Approved, awaiting explicit operator execution.</p>
+                          <div className="actions" aria-busy={executingAction}>
+                            <button disabled={executingAction} onClick={executeApprovedAction}>
+                              {executingAction ? "Execution requested…" : "Execute approved action"}
+                            </button>
+                          </div>
+                        </section>
                       )}
+                    {actionProposal.approval_status === "approved" && executionLookupStatus === "loading" && (
+                      <p role="status">Checking persisted execution…</p>
+                    )}
+                    {actionProposal.approval_status === "approved" && executionLookupStatus === "error" && (
+                      <p className="human-control">Execution controls are unavailable until persisted state can be confirmed.</p>
+                    )}
                     {actionExecution && (
                       <section className="execution-card" aria-label="Execution result">
                         <div className="panel-heading"><h4>Controlled execution</h4><StatusBadge status={actionExecution.status} /></div>
@@ -894,7 +1074,20 @@ export function App() {
                         {actionExecution.result?.data && (
                           <details><summary>Technical result</summary><pre>{JSON.stringify(actionExecution.result.data, null, 2)}</pre></details>
                         )}
-                        {actionExecution.error && (
+                        {actionExecution.result?.data && (
+                          <dl>
+                            {actionExecution.result.data.target && (
+                              <><dt>Target</dt><dd>{actionExecution.result.data.target}</dd></>
+                            )}
+                            {actionExecution.result.data.previous_state && (
+                              <><dt>Previous state</dt><dd>{actionExecution.result.data.previous_state}</dd></>
+                            )}
+                            {actionExecution.result.data.current_state && (
+                              <><dt>Current state</dt><dd>{actionExecution.result.data.current_state}</dd></>
+                            )}
+                          </dl>
+                        )}
+                        {actionExecution.status === "failed" && actionExecution.error && (
                           <p className="error">{actionExecution.error.message}</p>
                         )}
                         {actionExecution.status === "outcome_unknown" && (

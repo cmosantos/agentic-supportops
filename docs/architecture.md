@@ -143,6 +143,8 @@ Persistence + Audit Events
 
 Human approval does not give the AI unrestricted tool access. It permits one attempt of one persisted proposal. `ExecutionPolicy` independently and explicitly allows only `restart_simulated_service`, `unlock_simulated_user`, and `reset_simulated_application_state`; the endpoint accepts no replacement action data, and the executor combines the persisted proposal target with its persisted parameters. Each capability mutates only the deterministic local Contoso simulation. It does not call Responses API, Agents SDK, MCP, or any model to reinterpret the action.
 
+The nested `GET .../action-proposals/{proposal_id}/execution` path is a separate read boundary used to rediscover the canonical execution. It validates `incident -> investigation -> proposal -> execution`, returns `404` before execution exists, and never starts an attempt, invokes a capability, appends an event, changes timestamps or leases, verifies, reconciles, or retries.
+
 The capability operates entirely over the local Contoso application abstraction. For a known application/service it returns a deterministic transition such as `degraded -> healthy`; an unknown target produces a controlled failure. It invokes no shell, subprocess, Windows service manager, Docker, operating-system API, filesystem write, or external HTTP request.
 
 `action_executions.proposal_id` is unique. Creation in `RUNNING` state and the requested/started events commit together. Capability success or failure is recorded as `COMPLETED` or `FAILED`, and the matching terminal event commits in the same transaction. A repeated or concurrent request observes the existing row and cannot invoke the capability twice. Execution failure does not rewrite the historically separate `APPROVED` decision.
@@ -176,6 +178,8 @@ An unknown attempt may have one canonical `ActionExecutionReconciliation`. The s
 Recovery is an explicit POST for an existing canonical reconciliation that is both `RUNNING` and stale. A SQLite compare-and-set claim renews the persisted lease before one new read-only observation. Recovery creates neither attempt number 2 nor a second reconciliation and never repeats the mutation. A crash before observation can become recoverable after another stale window; a crash after observation but before terminal persistence can lead to a later observation. Repeating a read is safe, but the design does not claim exactly-once across crash boundaries.
 
 `GET /action-executions/{execution_id}/attempts/{attempt_id}/reconciliation` is a side-effect-free operational view. It derives `is_stale`, `recoverable`, and typed `recovery_block_reason` without observing, creating events, or renewing a lease. Its eligibility result is advisory; the recovery POST shares the same rule evaluator and revalidates persisted state before claiming work.
+
+`GET /action-executions/{execution_id}/attempt` exposes the already-persisted canonical physical attempt without changing it. The UI uses its ID to address the existing reconciliation resources; the route performs no capability invocation, stale assessment, retry, event append, or lease/timestamp update.
 
 Execution may produce an effect. Reconciliation only observes current state after an uncertain mutation. Verification independently validates outcome after an execution is completed, including completion by reconciliation. Human resolution decides whether the incident closes. Reconciliation does not replace verification, and verification does not resolve the incident.
 
@@ -289,6 +293,16 @@ Tests validate fresh databases, legacy constraint/index forms, preservation, ind
 ## Observability
 
 Persisted events are the domain audit timeline. OpenTelemetry is an optional technical view around request, investigation, model, tool, and selected persistence boundaries.
+
+### Operational Execution Timeline
+
+`GET /action-executions/{execution_id}/timeline` exposes a read-only projection of the persisted lifecycle facts that belong to one controlled execution. The projection reuses `investigation_events`, their timestamps, statuses, sequence, and bounded metadata such as `execution_id`, `attempt_id`, assessment reason, completion basis, observed state, and human resolution decision. It does not create a second event store.
+
+The repository first resolves `ActionExecution -> ActionProposal -> AIInvestigation`, then selects only events whose persisted metadata identifies the requested execution. Entries are ordered chronologically by timestamp, with event sequence and record ID as deterministic tie-breakers. Events from another execution in the same investigation are excluded. If an old or manually constructed execution has no provable lifecycle events, the endpoint returns an empty list instead of reconstructing or inventing history.
+
+Lifecycle state and observability remain distinct. `action_executions`, physical attempts, reconciliations, outcome verifications, and resolution decisions continue to own their state machines and transaction boundaries. The timeline only describes the audit events produced by those transitions; a GET cannot invoke a capability, assess staleness, renew a recovery lease, reconcile, verify, resolve, append an event, or change a timestamp.
+
+This preserves governance because the projection grants no new authority. Human approval remains required for controlled execution, unknown mutation outcomes remain non-retryable, reconciliation remains read-only and explicit, verification remains independent, and incident resolution remains a separate human decision. The timeline makes those boundaries visible without weakening them.
 
 Tracing is off by default. Supported local exporters are `none` and `console`; no collector is required. Safe resource identifiers may be attached to spans, while prompts, evidence payloads, credentials, response bodies, and headers are excluded.
 
