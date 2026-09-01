@@ -177,6 +177,19 @@ class AgentsSDKInvestigationService:
             raise AIInvestigationError("ai_timeout", "OpenAI request timed out") from error
         except ModelBehaviorError as error:
             usage, last_response_id = self._error_metadata(error, usage, last_response_id)
+            limit_error = self._find_tool_limit_error(error)
+            if limit_error is not None:
+                self._record_failure(events, run_started, limit_error.code, last_response_id)
+                self._fail(
+                    run,
+                    limit_error.code,
+                    str(limit_error),
+                    last_response_id,
+                    usage,
+                )
+                raise AIInvestigationError(
+                    limit_error.code, str(limit_error)
+                ) from error
             self._record_failure(events, run_started, "ai_invalid_result", last_response_id)
             self._fail(run, "ai_invalid_result", "Agents SDK returned invalid model output", last_response_id, usage)
             raise AIInvestigationError(

@@ -11,7 +11,7 @@ This is not a general-purpose chatbot. The unit of work is an incident. An inves
 - React/Vite operations console for the incident lifecycle, with deterministic, Responses API, and Agents SDK investigations.
 - FastAPI endpoints for incidents, investigations, evidence, latest state, run/event history, health, and AI configuration.
 - Declarative playbooks backed by 20 provider-independent, read-only SupportOps tools.
-- Optional OpenAI Responses API and comparative OpenAI Agents SDK runtimes.
+- Optional OpenAI Responses API and comparative manager-style OpenAI Agents SDK runtime with a SupportOps orchestrator and three bounded diagnostic specialists.
 - Canonical `InvestigationToolRegistry` for definitions, exact argument validation, execution, and normalized results.
 - Direct execution by default and an opt-in local MCP stdio transport for three allowlisted capabilities.
 - SQLAlchemy/SQLite persistence with append-oriented run/event history, concurrency protection, and atomic terminal persistence.
@@ -41,10 +41,15 @@ flowchart TD
     API --> Services[Application services]
     Services --> Deterministic[Deterministic playbooks]
     Services --> Responses[Responses API runtime]
-    Services --> Agents[Agents SDK runtime]
+    Services --> Agents[Agents SDK orchestrator]
+    Agents --> Identity[Identity and Access specialist]
+    Agents --> Endpoint[Endpoint and Network specialist]
+    Agents --> Infra[Infrastructure and Application specialist]
     Deterministic --> Registry[InvestigationToolRegistry]
     Responses --> Transport{Tool transport}
-    Agents --> Transport
+    Identity --> Transport
+    Endpoint --> Transport
+    Infra --> Transport
     Transport -->|direct - default| Registry
     Transport -->|MCP opt-in| Client[MCP client]
     Client -->|stdio| Server[Local MCP server]
@@ -62,7 +67,7 @@ The frontend never talks to MCP directly; it calls FastAPI. MCP is an internal a
 
 1. An operator selects an incident and a supported deterministic or model-guided investigation.
 2. Deterministic execution resolves a playbook. Model-guided execution creates a persisted run for `manual_responses` or `agents_sdk`.
-3. The runtime appends `run_started`, model-turn, and tool lifecycle events in sequence order.
+3. The runtime appends `run_started`, model-turn, and tool lifecycle events in sequence order. In the Agents SDK path, the orchestrator delegates relevant diagnostic questions to specialists exposed as agent-tools and retains ownership of the final result.
 4. Tool calls pass through the canonical registry, which validates exact names and string arguments before executing a read-only capability.
 5. Successful tool observations become evidence with a stable ID and the owning `investigation_id`; every tool outcome becomes a similarly scoped investigation step.
 6. The runtime gives persisted evidence IDs back to the model so later turns can correlate multiple observations. The final contract exposes the committed evidence references, hypothesis, confidence, missing information, recommended next steps, and human-control requirement.
@@ -156,6 +161,8 @@ With `TOOL_TRANSPORT=mcp`, the runtime advertises only the MCP allowlist:
 Agent runtime -> MCP client -> stdio -> local MCP server
               -> InvestigationToolRegistry -> same capability
 ```
+
+For the Agents SDK path, each specialist receives only the intersection of its fixed domain allowlist and the schemas exposed by the active registry/transport. The orchestrator receives only the three specialist agent-tools, never the 20 investigation capabilities directly. All nested calls share one `AgentsSDKRunContext`, so evidence ownership and total/repeated call limits cover the complete orchestration run.
 
 The official Python MCP SDK server exposes exactly:
 

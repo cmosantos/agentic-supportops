@@ -50,11 +50,13 @@ The service creates a `RUNNING` record in mode `ai`, records `run_started`, and 
 
 ### Agents SDK
 
-The comparative service creates a `RUNNING` record in mode `agents_sdk`. Application-created `FunctionTool` adapters invoke `AgentsSDKRunContext`, which applies call limits, records events, dispatches through the selected registry/transport, and normalizes results. Agents SDK provider tracing remains disabled.
+The comparative service creates a `RUNNING` record in mode `agents_sdk`. A SupportOps orchestrator uses the SDK manager pattern to call Identity and Access, Endpoint and Network, and Infrastructure and Application specialists as tools. The orchestrator owns the final `AIInvestigationResult` and receives no raw investigation capabilities.
+
+Each specialist gets only the intersection of its domain allowlist and `registry.openai_tools`. Application-created `FunctionTool` adapters invoke the same `AgentsSDKRunContext` across nested runs, so investigation ownership, evidence persistence, total/repeated call limits, tracing, state, and existing events remain application-owned. Delegations use the existing tool event types with small `agent_delegation` metadata; no separate telemetry model or chain-of-thought persistence is introduced. Agents SDK provider tracing remains disabled.
 
 ## Tool governance and MCP
 
-The registry contains 20 investigation tools plus one execution-only lab capability with explicit schemas. Exact argument names and string values are validated. The execution-only capability is excluded from `names`, OpenAI schemas, and MCP discovery, so the model cannot select it. No capability can choose arbitrary processes, files, database queries, URLs, headers, or credentials.
+The registry contains 20 investigation tools plus three execution-only lab capabilities with explicit schemas. Exact argument names and string values are validated. Execution-only capabilities are excluded from `names`, OpenAI schemas, specialist intersections, and MCP discovery, so no model can select them. No capability can choose arbitrary processes, files, database queries, URLs, headers, or credentials.
 
 ```text
 DIRECT: Runtime -> InvestigationToolRegistry -> capability

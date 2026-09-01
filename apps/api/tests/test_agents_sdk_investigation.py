@@ -19,7 +19,12 @@ from openai.types.responses import (
 
 from api.dependencies import get_agents_sdk_model
 from domain.ai import AIInvestigationResult, AIInvestigationStatus
-from integrations.agents_sdk_runtime import build_supportops_agent
+from integrations.agents_sdk_runtime import (
+    SPECIALIST_TOOL_ALLOWLISTS,
+    build_supportops_agent,
+    build_supportops_specialists,
+)
+from integrations.mcp_client import MCPInvestigationToolRegistry
 from main import app
 from services.tool_registry import InvestigationToolRegistry
 
@@ -44,6 +49,7 @@ def structured_result() -> AIInvestigationResult:
         diagnosis="The failure domain is DNS resolution.",
         confidence=0.9,
         supporting_evidence=["The simulated DNS lookup failed."],
+        evidence_ids=[999999],
         recommended_next_steps=["Review the simulated DNS server status."],
         missing_information=[],
     )
@@ -76,6 +82,66 @@ def tool_response(response_id: str = "resp-sdk-tools") -> ModelResponse:
         ],
         usage=Usage(requests=1, input_tokens=100, output_tokens=20, total_tokens=120),
         response_id=response_id,
+    )
+
+
+def delegation_response(response_id: str = "resp-sdk-delegate") -> ModelResponse:
+    return ModelResponse(
+        output=[
+            ResponseFunctionToolCall(
+                call_id="call-endpoint-specialist",
+                name="investigate_endpoint_network",
+                arguments='{"input":"Investigate connectivity and DNS for WS-003."}',
+                type="function_call",
+            )
+        ],
+        usage=Usage(requests=1, input_tokens=50, output_tokens=10, total_tokens=60),
+        response_id=response_id,
+    )
+
+
+def specialist_final_response(
+    response_id: str = "resp-sdk-specialist-final",
+) -> ModelResponse:
+    return ModelResponse(
+        output=[
+            ResponseOutputMessage(
+                id="msg-specialist-final",
+                role="assistant",
+                status="completed",
+                type="message",
+                content=[
+                    ResponseOutputText(
+                        annotations=[],
+                        text="External connectivity succeeds, DNS fails, and the configured DNS evidence was persisted.",
+                        type="output_text",
+                    )
+                ],
+            )
+        ],
+        usage=Usage(requests=1, input_tokens=40, output_tokens=20, total_tokens=60),
+        response_id=response_id,
+    )
+
+
+def repeated_tool_response() -> ModelResponse:
+    return ModelResponse(
+        output=[
+            ResponseFunctionToolCall(
+                call_id="call-disk-1",
+                name="get_disk_usage",
+                arguments='{"device_id":"WS-002"}',
+                type="function_call",
+            ),
+            ResponseFunctionToolCall(
+                call_id="call-disk-2",
+                name="get_disk_usage",
+                arguments='{"device_id":"WS-002"}',
+                type="function_call",
+            ),
+        ],
+        usage=Usage(requests=1, input_tokens=50, output_tokens=20, total_tokens=70),
+        response_id="resp-sdk-repeated-tools",
     )
 
 
@@ -157,10 +223,13 @@ def test_agent_definition_uses_strict_output_and_explicit_tools() -> None:
     agent = build_supportops_agent(
         FakeAgentsModel(), InvestigationToolRegistry(), 2000, 60
     )
-    assert agent.name == "SupportOps Investigator"
+    assert agent.name == "SupportOps Orchestrator"
     assert agent.output_type is AIInvestigationResult
-    assert len(agent.tools) == 20
-    assert {tool.name for tool in agent.tools} == set(InvestigationToolRegistry().names)
+    assert {tool.name for tool in agent.tools} == {
+        "investigate_identity_access",
+        "investigate_endpoint_network",
+        "investigate_infrastructure_application",
+    }
     assert all(tool.strict_json_schema for tool in agent.tools)
     assert all(
         tool.params_json_schema["additionalProperties"] is False
@@ -176,10 +245,55 @@ def test_agent_definition_uses_strict_output_and_explicit_tools() -> None:
     assert output_schema.json_schema()["additionalProperties"] is False
 
 
+def test_specialists_receive_only_registry_intersection_and_no_mutations() -> None:
+    registry = InvestigationToolRegistry()
+    specialists = build_supportops_specialists(FakeAgentsModel(), registry, 2000, 60)
+
+    expected_by_name = {
+        "Identity & Access Specialist": set(SPECIALIST_TOOL_ALLOWLISTS["identity_access"]),
+        "Endpoint & Network Specialist": set(SPECIALIST_TOOL_ALLOWLISTS["endpoint_network"]),
+        "Infrastructure & Application Specialist": set(
+            SPECIALIST_TOOL_ALLOWLISTS["infrastructure_application"]
+        ),
+    }
+    mutation_tools = {
+        "restart_simulated_service",
+        "unlock_simulated_user",
+        "reset_simulated_application_state",
+    }
+    for specialist in specialists:
+        names = {tool.name for tool in specialist.tools}
+        assert names == expected_by_name[specialist.name]
+        assert names.isdisjoint(mutation_tools)
+
+
+def test_mcp_specialists_cannot_expand_transport_allowlist() -> None:
+    registry = MCPInvestigationToolRegistry()
+    specialists = build_supportops_specialists(FakeAgentsModel(), registry, 2000, 60)
+    visible = {tool.name for specialist in specialists for tool in specialist.tools}
+
+    assert visible == set(registry.names)
+    assert {tool.name for tool in specialists[0].tools} == set()
+    assert {tool.name for tool in specialists[1].tools} == {
+        "get_disk_usage",
+        "check_dns_resolution",
+    }
+    assert {tool.name for tool in specialists[2].tools} == {
+        "get_application_health"
+    }
+
+
 def test_fake_runner_executes_real_tools_and_persists_sdk_audit(
     seeded_client: TestClient,
 ) -> None:
-    model = FakeAgentsModel([tool_response(), final_response()])
+    model = FakeAgentsModel(
+        [
+            delegation_response(),
+            tool_response(),
+            specialist_final_response(),
+            final_response(),
+        ]
+    )
     response = run_with_fake(seeded_client, model)
     assert response.status_code == 200, response.text
     body = response.json()
@@ -188,13 +302,13 @@ def test_fake_runner_executes_real_tools_and_persists_sdk_audit(
     assert body["investigation"]["response_id"] == "resp-sdk-final"
     assert body["investigation"]["result"]["diagnosis"] == "The failure domain is DNS resolution."
     assert body["investigation"]["usage"] == {
-        "input_tokens": 180,
-        "output_tokens": 60,
-        "total_tokens": 240,
-        "response_iterations": 2,
-        "requests": 2,
+        "input_tokens": 270,
+        "output_tokens": 90,
+        "total_tokens": 360,
+        "response_iterations": 4,
+        "requests": 4,
         "runtime": "agents_sdk",
-        "final_agent": "SupportOps Investigator",
+        "final_agent": "SupportOps Orchestrator",
     }
     assert [step["tool"] for step in body["steps"]] == [
         "check_external_connectivity",
@@ -214,6 +328,14 @@ def test_fake_runner_executes_real_tools_and_persists_sdk_audit(
     assert all(call["settings"].max_tokens == 2000 for call in model.calls)
     assert all(call["settings"].timeout == 60 for call in model.calls)
     assert all(call["settings"].retry is None for call in model.calls)
+    assert {tool.name for tool in model.calls[0]["tools"]} == {
+        "investigate_identity_access",
+        "investigate_endpoint_network",
+        "investigate_infrastructure_application",
+    }
+    assert {tool.name for tool in model.calls[1]["tools"]} == set(
+        SPECIALIST_TOOL_ALLOWLISTS["endpoint_network"]
+    )
 
     stored = seeded_client.get("/incidents/INC-019/agent-sdk-investigation")
     assert stored.status_code == 200
@@ -255,7 +377,9 @@ def test_production_model_boundary_disables_http_retries(monkeypatch) -> None:
 
 
 def test_runner_max_turns_is_mapped_and_persisted(seeded_client: TestClient) -> None:
-    model = FakeAgentsModel([tool_response("resp-only-tools")])
+    model = FakeAgentsModel(
+        [delegation_response("resp-only-tools"), specialist_final_response()]
+    )
     app.dependency_overrides[get_agents_sdk_model] = lambda: model
     from api import routes
 
@@ -278,7 +402,9 @@ def test_runner_max_turns_is_mapped_and_persisted(seeded_client: TestClient) -> 
 
 
 def test_total_tool_limit_stops_sdk_run(seeded_client: TestClient) -> None:
-    model = FakeAgentsModel([tool_response(), final_response()])
+    model = FakeAgentsModel(
+        [delegation_response(), tool_response(), specialist_final_response()]
+    )
     app.dependency_overrides[get_agents_sdk_model] = lambda: model
     from api import routes
 
@@ -294,6 +420,29 @@ def test_total_tool_limit_stops_sdk_run(seeded_client: TestClient) -> None:
         app.dependency_overrides.pop(get_agents_sdk_model, None)
     assert response.status_code == 502
     assert response.json()["detail"]["code"] == "ai_tool_limit_reached"
+
+
+def test_repeated_tool_limit_is_global_inside_specialist(
+    seeded_client: TestClient,
+) -> None:
+    model = FakeAgentsModel(
+        [delegation_response(), repeated_tool_response(), specialist_final_response()]
+    )
+    app.dependency_overrides[get_agents_sdk_model] = lambda: model
+    from api import routes
+
+    original = routes.settings
+    routes.settings = type("Settings", (), {
+        **vars(original),
+        "ai_max_identical_tool_calls": 1,
+    })()
+    try:
+        response = seeded_client.post("/incidents/INC-019/investigate-agent-sdk")
+    finally:
+        routes.settings = original
+        app.dependency_overrides.pop(get_agents_sdk_model, None)
+    assert response.status_code == 502
+    assert response.json()["detail"]["code"] == "ai_repeated_call_limit"
 
 
 def test_unexpected_provider_failure_is_bounded(seeded_client: TestClient) -> None:

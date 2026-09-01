@@ -4,7 +4,13 @@ from api.dependencies import get_agents_sdk_model
 from integrations.responses_gateway import ResponsesProviderError
 from main import app
 from tests.fakes import FakeResponsesGateway, call_turn, final_turn
-from tests.test_agents_sdk_investigation import FakeAgentsModel, final_response, tool_response
+from tests.test_agents_sdk_investigation import (
+    FakeAgentsModel,
+    delegation_response,
+    final_response,
+    specialist_final_response,
+    tool_response,
+)
 
 
 def run_manual(client: TestClient, gateway):
@@ -91,7 +97,15 @@ def test_sdk_timeline_uses_raw_model_responses_and_function_tool_boundaries(
     seeded_client: TestClient,
 ) -> None:
     assert run_sdk(
-        seeded_client, FakeAgentsModel([tool_response(), final_response()])
+        seeded_client,
+        FakeAgentsModel(
+            [
+                delegation_response(),
+                tool_response(),
+                specialist_final_response(),
+                final_response(),
+            ]
+        ),
     ).status_code == 200
     timeline = events(seeded_client, "agents_sdk")
 
@@ -99,18 +113,21 @@ def test_sdk_timeline_uses_raw_model_responses_and_function_tool_boundaries(
     assert timeline[-1]["event_type"] == "run_completed"
     requested = [item for item in timeline if item["event_type"] == "tool_requested"]
     completed = [item for item in timeline if item["event_type"] == "tool_completed"]
-    assert len(requested) == len(completed) == 3
-    assert all(item["model_turn"] == 1 for item in requested + completed)
+    assert len(requested) == len(completed) == 4
+    assert requested[0]["tool_name"] == "investigate_endpoint_network"
+    assert completed[-1]["metadata"]["kind"] == "agent_delegation"
     turns = [item for item in timeline if item["event_type"] == "model_turn_completed"]
     assert [item["response_id"] for item in turns] == [
+        "resp-sdk-delegate",
         "resp-sdk-tools",
+        "resp-sdk-specialist-final",
         "resp-sdk-final",
     ]
-    assert sum(item["input_tokens"] for item in turns) == 180
-    assert sum(item["output_tokens"] for item in turns) == 60
-    assert sum(item["total_tokens"] for item in turns) == 240
+    assert sum(item["input_tokens"] for item in turns) == 270
+    assert sum(item["output_tokens"] for item in turns) == 90
+    assert sum(item["total_tokens"] for item in turns) == 360
     final = next(item for item in timeline if item["event_type"] == "final_output")
-    assert final["metadata"]["final_agent"] == "SupportOps Investigator"
+    assert final["metadata"]["final_agent"] == "SupportOps Orchestrator"
 
 
 def test_runtime_timelines_coexist_and_are_isolated(seeded_client: TestClient) -> None:

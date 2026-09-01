@@ -15,7 +15,44 @@ from services.investigation_event_recorder import InvestigationEventRecorder
 from observability.tracing import TraceBoundary
 
 
-PROMPT_PATH = Path(__file__).resolve().parents[2] / "prompts" / "ai-investigator.md"
+PROMPT_ROOT = Path(__file__).resolve().parents[2] / "prompts"
+ORCHESTRATOR_PROMPT_PATH = PROMPT_ROOT / "supportops-orchestrator.md"
+SPECIALIST_PROMPT_PATHS = {
+    "identity_access": PROMPT_ROOT / "identity-access-specialist.md",
+    "endpoint_network": PROMPT_ROOT / "endpoint-network-specialist.md",
+    "infrastructure_application": (
+        PROMPT_ROOT / "infrastructure-application-specialist.md"
+    ),
+}
+
+SPECIALIST_TOOL_ALLOWLISTS = {
+    "identity_access": (
+        "get_user",
+        "get_account_status",
+        "get_user_groups",
+        "get_user_licenses",
+        "get_mailbox",
+        "get_mailbox_permissions",
+    ),
+    "endpoint_network": (
+        "get_device",
+        "get_cpu_usage",
+        "get_memory_usage",
+        "get_disk_usage",
+        "get_network_config",
+        "get_service_status",
+        "check_gateway_connectivity",
+        "check_external_connectivity",
+        "check_dns_resolution",
+    ),
+    "infrastructure_application": (
+        "get_host_status",
+        "get_recent_alerts",
+        "get_metrics",
+        "get_service_health",
+        "get_application_health",
+    ),
+}
 
 
 class AgentsSDKToolLimitError(RuntimeError):
@@ -38,6 +75,7 @@ class AgentsSDKRunContext:
     selected_tools: list[str] = field(default_factory=list)
     events: InvestigationEventRecorder | None = None
     tool_turns: dict[str, int] = field(default_factory=dict)
+    terminal_tool_error: AgentsSDKToolLimitError | None = None
 
     def execute(self, name: str, raw_arguments: str, tool_call_id: str | None) -> str:
         model_turn = self.tool_turns.get(tool_call_id) if tool_call_id else None
@@ -91,9 +129,11 @@ class AgentsSDKRunContext:
                     result_summary="Tool was not executed because the total call limit was reached",
                     metadata={"transport": self.tools.transport},
                 )
-            raise AgentsSDKToolLimitError(
+            error = AgentsSDKToolLimitError(
                 "ai_tool_limit_reached", "Maximum total tool calls reached"
             )
+            self.terminal_tool_error = error
+            raise error
         signature = f"{name}:{raw_arguments}"
         self.repeated_calls[signature] += 1
         if self.repeated_calls[signature] > self.max_identical_tool_calls:
@@ -108,9 +148,11 @@ class AgentsSDKRunContext:
                     result_summary="Tool was not executed because the identical call limit was reached",
                     metadata={"transport": self.tools.transport},
                 )
-            raise AgentsSDKToolLimitError(
+            error = AgentsSDKToolLimitError(
                 "ai_repeated_call_limit", "Repeated identical tool-call limit reached"
             )
+            self.terminal_tool_error = error
+            raise error
         try:
             arguments, result = self.tools.dispatch(name, raw_arguments)
         except Exception:
@@ -245,10 +287,16 @@ class ObservableAgentsModel(Model):
         return self._model.stream_response(*args, **kwargs)
 
 
-def build_agents_sdk_tools(registry: InvestigationToolRegistry) -> list[FunctionTool]:
+def build_agents_sdk_tools(
+    registry: InvestigationToolRegistry,
+    allowed_names: tuple[str, ...] | None = None,
+) -> list[FunctionTool]:
+    allowed = set(allowed_names) if allowed_names is not None else None
     sdk_tools: list[FunctionTool] = []
     for schema in registry.openai_tools:
         name = schema["name"]
+        if allowed is not None and name not in allowed:
+            continue
 
         async def invoke(
             context: ToolContext[AgentsSDKRunContext],
@@ -271,15 +319,128 @@ def build_agents_sdk_tools(registry: InvestigationToolRegistry) -> list[Function
     return sdk_tools
 
 
+def build_supportops_specialists(
+    model: Model,
+    registry: InvestigationToolRegistry,
+    max_output_tokens: int,
+    timeout_seconds: float,
+) -> list[Agent[AgentsSDKRunContext]]:
+    settings = ModelSettings(
+        max_tokens=max_output_tokens,
+        timeout=timeout_seconds,
+        retry=None,
+        parallel_tool_calls=True,
+    )
+    definitions = (
+        ("Identity & Access Specialist", "identity_access"),
+        ("Endpoint & Network Specialist", "endpoint_network"),
+        (
+            "Infrastructure & Application Specialist",
+            "infrastructure_application",
+        ),
+    )
+    return [
+        Agent[AgentsSDKRunContext](
+            name=name,
+            instructions=SPECIALIST_PROMPT_PATHS[key].read_text(encoding="utf-8"),
+            model=model,
+            model_settings=settings,
+            tools=build_agents_sdk_tools(registry, SPECIALIST_TOOL_ALLOWLISTS[key]),
+        )
+        for name, key in definitions
+    ]
+
+
+def _as_audited_specialist_tool(
+    specialist: Agent[AgentsSDKRunContext],
+    tool_name: str,
+    tool_description: str,
+) -> FunctionTool:
+    specialist_tool = specialist.as_tool(
+        tool_name=tool_name,
+        tool_description=tool_description,
+    )
+    invoke_specialist = specialist_tool.on_invoke_tool
+
+    async def invoke(
+        context: ToolContext[AgentsSDKRunContext], raw_arguments: str
+    ) -> str:
+        tool_call_id = getattr(context, "tool_call_id", None)
+        model_turn = (
+            context.context.tool_turns.get(tool_call_id) if tool_call_id else None
+        )
+        started = monotonic()
+        metadata = {"kind": "agent_delegation", "agent": specialist.name}
+        if context.context.events:
+            context.context.events.record(
+                InvestigationEventType.TOOL_STARTED,
+                model_turn=model_turn,
+                tool_name=tool_name,
+                tool_call_id=tool_call_id,
+                status="running",
+                metadata=metadata,
+            )
+        try:
+            output = await invoke_specialist(context, raw_arguments)
+            if context.context.terminal_tool_error is not None:
+                raise context.context.terminal_tool_error
+        except Exception:
+            if context.context.events:
+                context.context.events.record(
+                    InvestigationEventType.TOOL_FAILED,
+                    model_turn=model_turn,
+                    tool_name=tool_name,
+                    tool_call_id=tool_call_id,
+                    status="failed",
+                    duration_ms=(monotonic() - started) * 1000,
+                    metadata=metadata,
+                )
+            raise
+        if context.context.events:
+            context.context.events.record(
+                InvestigationEventType.TOOL_COMPLETED,
+                model_turn=model_turn,
+                tool_name=tool_name,
+                tool_call_id=tool_call_id,
+                status="completed",
+                duration_ms=(monotonic() - started) * 1000,
+                metadata=metadata,
+            )
+        return output
+
+    specialist_tool.on_invoke_tool = invoke
+    return specialist_tool
+
+
 def build_supportops_agent(
     model: Model,
     registry: InvestigationToolRegistry,
     max_output_tokens: int,
     timeout_seconds: float,
 ) -> Agent[AgentsSDKRunContext]:
+    specialists = build_supportops_specialists(
+        model, registry, max_output_tokens, timeout_seconds
+    )
+    specialist_tools = [
+        _as_audited_specialist_tool(
+            specialists[0],
+            "investigate_identity_access",
+            "Investigate identity, access, licensing, mailbox, or mailbox-permission evidence.",
+        ),
+        _as_audited_specialist_tool(
+            specialists[1],
+            "investigate_endpoint_network",
+            "Investigate endpoint resource, service, network, gateway, external connectivity, or DNS evidence.",
+        ),
+        _as_audited_specialist_tool(
+            specialists[2],
+            "investigate_infrastructure_application",
+            "Investigate host, alert, metric, service-health, or application-health evidence.",
+        ),
+    ]
     return Agent[AgentsSDKRunContext](
-        name="SupportOps Investigator",
-        instructions=PROMPT_PATH.read_text(encoding="utf-8"),
+        name="SupportOps Orchestrator",
+        instructions=ORCHESTRATOR_PROMPT_PATH.read_text(encoding="utf-8"),
         model=model,
         model_settings=ModelSettings(
             max_tokens=max_output_tokens,
@@ -287,6 +448,6 @@ def build_supportops_agent(
             retry=None,
             parallel_tool_calls=True,
         ),
-        tools=build_agents_sdk_tools(registry),
+        tools=specialist_tools,
         output_type=AIInvestigationResult,
     )

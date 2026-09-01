@@ -15,8 +15,10 @@ from observability.tracing import TraceBoundary
 from tests.fakes import FakeResponsesGateway, call_turn, final_turn
 from tests.test_agents_sdk_investigation import (
     FakeAgentsModel,
+    delegation_response,
     final_response,
     run_with_fake as run_sdk,
+    specialist_final_response,
     tool_response,
 )
 from tests.test_ai_investigation import run_with_fake as run_manual
@@ -84,7 +86,9 @@ def manual_gateway() -> FakeResponsesGateway:
     )
 
 
-def assert_investigation_hierarchy(exporter, runtime: str) -> None:
+def assert_investigation_hierarchy(
+    exporter, runtime: str, expected_model_turns: int = 2
+) -> None:
     investigations = span_by_name(exporter, "supportops.investigation")
     assert len(investigations) == 1
     investigation = investigations[0]
@@ -98,7 +102,7 @@ def assert_investigation_hierarchy(exporter, runtime: str) -> None:
 
     model_spans = span_by_name(exporter, "supportops.model.turn")
     tool_spans = span_by_name(exporter, "supportops.tool.execute")
-    assert len(model_spans) == 2
+    assert len(model_spans) == expected_model_turns
     assert len(tool_spans) == 3
     assert all(span.context.trace_id == trace_id for span in model_spans + tool_spans)
     assert all(
@@ -175,7 +179,14 @@ def test_agents_sdk_exports_same_local_hierarchy_without_sdk_tracing(
     seeded_client: TestClient,
 ) -> None:
     boundary, exporter = enabled_boundary()
-    model = FakeAgentsModel([tool_response(), final_response()])
+    model = FakeAgentsModel(
+        [
+            delegation_response(),
+            tool_response(),
+            specialist_final_response(),
+            final_response(),
+        ]
+    )
     with_boundary(boundary)
     try:
         response = run_sdk(seeded_client, model)
@@ -183,7 +194,7 @@ def test_agents_sdk_exports_same_local_hierarchy_without_sdk_tracing(
         clear_boundary()
         boundary.shutdown()
     assert response.status_code == 200
-    assert_investigation_hierarchy(exporter, "agents_sdk")
+    assert_investigation_hierarchy(exporter, "agents_sdk", expected_model_turns=4)
     assert all(call["tracing"] is ModelTracing.DISABLED for call in model.calls)
 
 
@@ -249,7 +260,15 @@ def test_fake_sdk_tool_spans_prove_local_execution_is_sequential(
     with_boundary(boundary)
     try:
         response = run_sdk(
-            seeded_client, FakeAgentsModel([tool_response(), final_response()])
+            seeded_client,
+            FakeAgentsModel(
+                [
+                    delegation_response(),
+                    tool_response(),
+                    specialist_final_response(),
+                    final_response(),
+                ]
+            ),
         )
     finally:
         clear_boundary()
