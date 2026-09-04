@@ -231,6 +231,7 @@ function installFetch(options?: {
   incidentsOverride?: readonly unknown[];
   attempt?: (url: string, init?: RequestInit) => Promise<Response>;
   execution?: (url: string, init?: RequestInit) => Promise<Response>;
+  timeline?: (url: string, init?: RequestInit) => Promise<Response>;
   proposals?: (url: string, init?: RequestInit) => Promise<Response>;
   reconciliation?: (url: string, init?: RequestInit) => Promise<Response>;
   resolution?: (url: string, init?: RequestInit) => Promise<Response>;
@@ -1059,7 +1060,7 @@ describe("Agentic SupportOps operator workflow", () => {
 
     expect(await screen.findByText(/reconciliation appears stale/i)).toBeVisible();
     expect(screen.getByText(/explicit recovery is available as a separate operation/i)).toBeVisible();
-    expect(screen.queryByRole("button", { name: /recover/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Recover stale reconciliation" })).toBeVisible();
     expect(fetchMock.mock.calls.filter(([url]) => String(url).includes("/recover"))).toHaveLength(0);
   });
 
@@ -1176,6 +1177,7 @@ describe("Agentic SupportOps operator workflow", () => {
     };
     installFetch({
       aiConfigured: true,
+      attempt: async () => jsonResponse({ ...canonicalUnknownAttempt, id: 77 }),
       get: async (url) => {
         if (url.endsWith("/events")) {
           return jsonResponse([{
@@ -1186,26 +1188,8 @@ describe("Agentic SupportOps operator workflow", () => {
             sequence: 5,
             status: "outcome_unknown",
             timestamp: "2026-08-28T12:14:02Z",
-            metadata: { attempt_id: 77, outcome_certainty: "unknown" },
+            metadata: {},
           }]);
-        }
-        if (url.endsWith("/reconciliation")) {
-          return jsonResponse({
-            id: 80,
-            attempt_id: 77,
-            execution_id: 50,
-            status: "desired_state_observed",
-            observer: "get_application_health",
-            expected_outcome: { state: "healthy" },
-            observed_outcome: { state: "healthy" },
-            error: null,
-            requested_at: "2026-08-28T12:15:00Z",
-            started_at: "2026-08-28T12:15:00Z",
-            completed_at: "2026-08-28T12:15:01Z",
-            is_stale: false,
-            recoverable: false,
-            recovery_block_reason: "reconciliation_not_running",
-          });
         }
         return undefined;
       },
@@ -1241,7 +1225,7 @@ describe("Agentic SupportOps operator workflow", () => {
     expect(await screen.findByText("Outcome certainty is unknown")).toBeVisible();
     expect(screen.getByText(/automatic retry is unsafe/)).toBeVisible();
     expect(screen.queryByRole("button", { name: /execute approved/i })).not.toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: "Reconcile observed state" }));
+    await userEvent.click(screen.getByRole("button", { name: "Reconcile state" }));
     expect(await screen.findByRole("region", { name: "Reconciliation" })).toHaveTextContent(
       "DESIRED STATE OBSERVED",
     );

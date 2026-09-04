@@ -90,6 +90,13 @@ type ActionExecution = {
   error: { code: string; message: string } | null;
   completion_basis: "acknowledged_result" | "reconciliation" | "legacy_recorded" | null;
 };
+type ActionExecutionAttempt = {
+  id: number;
+  attempt_number: number;
+  status: "running" | "completed" | "failed" | "outcome_unknown";
+  invocation_started_at: string | null;
+  outcome_certainty: "applied_acknowledged" | "not_applied" | "unknown" | "legacy_undetermined" | null;
+};
 type InvestigationEvent = {
   id: number;
   investigation_id: number;
@@ -212,6 +219,16 @@ function displayStatus(status: string): string {
   return status.replaceAll("_", " ");
 }
 
+function isReconciliationEligible(attempt: ActionExecutionAttempt | null): boolean {
+  return Boolean(
+    attempt &&
+    attempt.attempt_number === 1 &&
+    attempt.status === "outcome_unknown" &&
+    attempt.invocation_started_at &&
+    attempt.outcome_certainty === "unknown"
+  );
+}
+
 function displayAction(action: string): string {
   const labels: Record<string, string> = {
     restart_simulated_service: "Restart simulated service",
@@ -264,13 +281,10 @@ export function App() {
   const [executionLookupStatus, setExecutionLookupStatus] = useState<ExecutionLookupStatus>("idle");
   const [executingAction, setExecutingAction] = useState(false);
   const [actionExecutionAttempt, setActionExecutionAttempt] = useState<ActionExecutionAttempt | null>(null);
-  const [reconciliation, setReconciliation] = useState<ActionExecutionReconciliation | null>(null);
+  const [reconciliation, setReconciliation] = useState<Reconciliation | null>(null);
   const [reconciliationLookupStatus, setReconciliationLookupStatus] = useState<ReconciliationLookupStatus>("idle");
   const [reconciling, setReconciling] = useState(false);
   const [outcomeVerification, setOutcomeVerification] = useState<OutcomeVerification | null>(null);
-  const [attemptId, setAttemptId] = useState<number | null>(null);
-  const [reconciliation, setReconciliation] = useState<Reconciliation | null>(null);
-  const [reconciling, setReconciling] = useState(false);
   const [verifyingOutcome, setVerifyingOutcome] = useState(false);
   const [resolutionDecisions, setResolutionDecisions] = useState<IncidentResolutionDecision[]>([]);
   const [resolutionReason, setResolutionReason] = useState("");
@@ -424,8 +438,6 @@ export function App() {
     setReconciliationLookupStatus("idle");
     setReconciling(false);
     setOutcomeVerification(null);
-    setAttemptId(null);
-    setReconciliation(null);
     setVerifyingOutcome(false);
     setResolutionDecisions([]);
     setResolutionReason("");
@@ -485,9 +497,14 @@ export function App() {
       setEvents(historicalEvents);
       setActionProposal(proposals.at(-1) ?? null);
       setActionExecution(null);
-      setOutcomeVerification(null);
-      setAttemptId(null);
+      setExecutionLookupStatus("idle");
+      setActionExecutionAttempt(null);
       setReconciliation(null);
+      setReconciliationLookupStatus("idle");
+      setReconciling(false);
+      setOutcomeVerification(null);
+      setExecutionTimeline([]);
+      setTimelineLookupStatus("idle");
     } catch (error: unknown) {
       if (version === investigationVersion.current) {
         setProposalError(error instanceof Error ? error.message : "History loading failed");
@@ -682,22 +699,11 @@ export function App() {
       if (!response.ok) throw new Error(await investigationErrorMessage(response));
       const execution: ActionExecution = await response.json();
       setActionExecution(execution);
-      try {
-        const eventResponse = await fetch(
-          `${apiBaseUrl}/incidents/${reference}/investigation-runs/${actionProposal.investigation_id}/events`,
-        );
-        if (eventResponse.ok) {
-          const persistedEvents: InvestigationEvent[] = await eventResponse.json();
-          setEvents(persistedEvents);
-          const attemptEvent = [...persistedEvents].reverse().find((item) =>
-            typeof item.metadata.attempt_id === "number"
-          );
-          const persistedAttemptId = attemptEvent?.metadata.attempt_id;
-          if (typeof persistedAttemptId === "number") setAttemptId(persistedAttemptId);
-        }
-      } catch {
-        // Execution remains authoritative even when timeline hydration is unavailable.
-      }
+      setExecutionLookupStatus("found");
+      await Promise.all([
+        loadReconciliationContext(execution),
+        loadExecutionTimeline(execution.id),
+      ]);
       if (execution.status === "completed") {
         try {
           const verificationResponse = await fetch(
@@ -718,26 +724,37 @@ export function App() {
     }
   }
 
-  async function reconcileUnknownAttempt(recover = false) {
-    if (!actionExecution || !attemptId || reconciling) return;
+  async function reconcileExecution(recover = false) {
+    if (
+      !selected ||
+      !actionProposal ||
+      !actionExecution ||
+      !actionExecutionAttempt ||
+      reconciliationRequestInFlight.current
+    ) return;
+    reconciliationRequestInFlight.current = true;
     setReconciling(true);
     setProposalError(null);
-    const suffix = recover ? "reconciliation/recover" : "reconcile";
+    const reference = selected.catalog_id ?? selected.id;
     try {
       const response = await fetch(
-        `${apiBaseUrl}/action-executions/${actionExecution.id}/attempts/${attemptId}/${suffix}`,
+        `${apiBaseUrl}/action-executions/${actionExecution.id}/attempts/${actionExecutionAttempt.id}/${recover ? "reconciliation/recover" : "reconcile"}`,
         { method: "POST" },
       );
       if (!response.ok) throw new Error(await investigationErrorMessage(response));
-      const result: Reconciliation = await response.json();
-      setReconciliation(result);
-      const operational = await fetch(
-        `${apiBaseUrl}/action-executions/${actionExecution.id}/attempts/${attemptId}/reconciliation`,
+      setReconciliation(await response.json());
+      setReconciliationLookupStatus("found");
+      const executionResponse = await fetch(
+        `${apiBaseUrl}/incidents/${reference}/investigation-runs/${actionProposal.investigation_id}/action-proposals/${actionProposal.id}/execution`,
       );
-      if (operational.ok) setReconciliation(await operational.json());
+      if (!executionResponse.ok) throw new Error(await investigationErrorMessage(executionResponse));
+      const refreshedExecution: ActionExecution = await executionResponse.json();
+      setActionExecution(refreshedExecution);
+      await loadExecutionTimeline(refreshedExecution.id);
     } catch (error: unknown) {
       setProposalError(error instanceof Error ? error.message : "Reconciliation failed");
     } finally {
+      reconciliationRequestInFlight.current = false;
       setReconciling(false);
     }
   }
@@ -808,20 +825,7 @@ export function App() {
     }
   }
 
-  const physicalAttemptEvent = [...events].reverse().find((item) =>
-    ["execution_completed", "execution_failed", "execution_attempt_outcome_unknown"].includes(
-      item.event_type,
-    )
-  );
-  const outcomeCertainty = typeof physicalAttemptEvent?.metadata.outcome_certainty === "string"
-    ? physicalAttemptEvent.metadata.outcome_certainty
-    : actionExecution?.status === "completed"
-      ? "applied_acknowledged"
-      : actionExecution?.status === "failed"
-        ? "not_applied"
-        : actionExecution?.status === "outcome_unknown"
-          ? "unknown"
-          : null;
+  const outcomeCertainty = actionExecutionAttempt?.outcome_certainty ?? null;
   const currentResolution = outcomeVerification
     ? resolutionDecisions.find((item) => item.verification_id === outcomeVerification.id)
     : resolutionDecisions.at(-1);
@@ -1043,6 +1047,7 @@ export function App() {
                       </div>
                     )}
                     {actionProposal.approval_status === "approved" &&
+                      executionLookupStatus === "not_found" &&
                       !actionExecution && (
                         <section className="result-section" aria-label="Approved action execution">
                           <p className="human-control">Approved, awaiting explicit operator execution.</p>
@@ -1063,12 +1068,12 @@ export function App() {
                       <section className="execution-card" aria-label="Execution result">
                         <div className="panel-heading"><h4>Controlled execution</h4><StatusBadge status={actionExecution.status} /></div>
                         <p><b>Capability:</b> {displayAction(actionExecution.capability_name)}</p>
-                        <p><b>Execution status:</b> {actionExecution.status.toUpperCase()}</p>
+                        <p><b>Execution status:</b> {displayStatus(actionExecution.status).toUpperCase()}</p>
                         {actionExecution.completion_basis && <p><b>Completion basis:</b> {displayStatus(actionExecution.completion_basis)}</p>}
                         {outcomeCertainty && (
                           <div className="attempt-summary">
                             <span>Physical attempt</span><StatusBadge status={outcomeCertainty} />
-                            {attemptId && <small>Attempt #{attemptId}</small>}
+                            {actionExecutionAttempt && <small>Attempt #{actionExecutionAttempt.id}</small>}
                           </div>
                         )}
                         {actionExecution.result?.data && (
@@ -1090,31 +1095,97 @@ export function App() {
                         {actionExecution.status === "failed" && actionExecution.error && (
                           <p className="error">{actionExecution.error.message}</p>
                         )}
+                        {actionExecution.status === "running" && (
+                          <p className="human-control">Execution is in progress. No additional request will be sent.</p>
+                        )}
                         {actionExecution.status === "outcome_unknown" && (
                           <div className="unknown-outcome">
                             <strong>Outcome certainty is unknown</strong>
-                            <p>The mutation may have started, so automatic retry is unsafe.</p>
-                            {attemptId ? (
-                              <button disabled={reconciling || Boolean(reconciliation)} onClick={() => reconcileUnknownAttempt()}>
-                                {reconciling ? "Reconciling…" : "Reconcile observed state"}
-                              </button>
-                            ) : <p className="muted">Attempt metadata is not yet available.</p>}
+                            <p>The mutation may have started, so automatic retry is unsafe. The action will not be retried automatically.</p>
                           </div>
                         )}
                       </section>
                     )}
+                    {actionExecution && (
+                      <section className="result-section execution-timeline" aria-label="Execution Timeline">
+                        <h4>Execution Timeline</h4>
+                        {timelineLookupStatus === "loading" && (
+                          <p role="status">Loading execution timeline…</p>
+                        )}
+                        {timelineLookupStatus === "error" && (
+                          <p className="error" role="alert">Unable to load execution timeline.</p>
+                        )}
+                        {timelineLookupStatus === "loaded" && executionTimeline.length === 0 && (
+                          <p>No persisted lifecycle events are available for this execution.</p>
+                        )}
+                        {timelineLookupStatus === "loaded" && executionTimeline.length > 0 && (
+                          <ol>
+                            {executionTimeline.map((entry, index) => (
+                              <li key={`${entry.timestamp}-${entry.event_type}-${index}`} className={`timeline-${entry.status ?? "recorded"}`}>
+                                <time dateTime={entry.timestamp}>{new Date(entry.timestamp).toLocaleString()}</time>
+                                <p><b>{displayStatus(entry.event_type)}</b></p>
+                                <p>{entry.description}</p>
+                                <small>
+                                  Execution #{entry.execution_id}
+                                  {entry.attempt_id ? ` · Attempt #${entry.attempt_id}` : ""}
+                                  {entry.status ? ` · ${displayStatus(entry.status).toUpperCase()}` : ""}
+                                </small>
+                                {entry.reason && <small>Reason: {displayStatus(entry.reason)}</small>}
+                              </li>
+                            ))}
+                          </ol>
+                        )}
+                      </section>
+                    )}
+                    {actionExecution?.status === "outcome_unknown" && reconciliationLookupStatus === "loading" && (
+                      <p role="status">Checking reconciliation state…</p>
+                    )}
+                    {actionExecution?.status === "outcome_unknown" &&
+                      reconciliationLookupStatus === "not_found" &&
+                      isReconciliationEligible(actionExecutionAttempt) && (
+                        <section className="result-section" aria-label="Reconciliation control">
+                          <p className="human-control">
+                            Reconciliation performs a read-only observation of current state. It never retries the original mutation.
+                          </p>
+                          <div className="actions" aria-busy={reconciling}>
+                            <button disabled={reconciling} onClick={() => reconcileExecution()}>
+                              {reconciling ? "Reconciling state…" : "Reconcile state"}
+                            </button>
+                          </div>
+                        </section>
+                      )}
                     {reconciliation && (
                       <section className="result-section reconciliation-card" aria-label="Reconciliation">
                         <div className="panel-heading"><h4>Reconciliation</h4><StatusBadge status={reconciliation.status} /></div>
-                        <p><b>Observer:</b> {displayStatus(reconciliation.observer)}</p>
-                        <p><b>Expected:</b> {reconciliation.expected_outcome.state?.toUpperCase() ?? "UNKNOWN"}</p>
-                        {reconciliation.observed_outcome?.state && <p><b>Observed:</b> {reconciliation.observed_outcome.state.toUpperCase()}</p>}
-                        {typeof reconciliation.is_stale === "boolean" && <p><b>Stale:</b> {reconciliation.is_stale ? "Yes" : "No"}</p>}
-                        {reconciliation.recovery_block_reason && <p><b>Recovery block:</b> {displayStatus(reconciliation.recovery_block_reason)}</p>}
+                        <p><b>Reconciliation status:</b> {displayStatus(reconciliation.status).toUpperCase()}</p>
+                        {reconciliation.expected_outcome.state && (
+                          <p><b>Expected state:</b> {reconciliation.expected_outcome.state.toUpperCase()}</p>
+                        )}
+                        {reconciliation.observed_outcome?.state && (
+                          <p><b>Observed state:</b> {reconciliation.observed_outcome.state.toUpperCase()}</p>
+                        )}
+                        {reconciliation.status === "desired_state_observed" && (
+                          <p className="human-control">The desired technical state is currently observed. This does not prove that the original invocation succeeded.</p>
+                        )}
+                        {reconciliation.status === "undesired_state_observed" && (
+                          <p className="human-control">The desired state is not currently observed. This does not prove that the original mutation did not occur.</p>
+                        )}
+                        {reconciliation.status === "inconclusive" && (
+                          <p className="human-control">A reliable conclusion could not be obtained. The execution remains outcome unknown.</p>
+                        )}
+                        {reconciliation.status === "running" && !reconciliation.is_stale && (
+                          <p className="human-control">A reconciliation exists and is still non-terminal.</p>
+                        )}
+                        {reconciliation.status === "running" && reconciliation.is_stale && (
+                          <p className="human-control">This reconciliation appears stale. Explicit recovery is available as a separate operation and is not started here.</p>
+                        )}
                         {reconciliation.recoverable && (
-                          <button disabled={reconciling} onClick={() => reconcileUnknownAttempt(true)}>
+                          <button disabled={reconciling} onClick={() => reconcileExecution(true)}>
                             {reconciling ? "Recovering…" : "Recover stale reconciliation"}
                           </button>
+                        )}
+                        {reconciliation.status === "inconclusive" && reconciliation.error && (
+                          <p className="error">{reconciliation.error.message}</p>
                         )}
                       </section>
                     )}
