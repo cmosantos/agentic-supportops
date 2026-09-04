@@ -15,11 +15,11 @@ This is not a general-purpose chatbot. The unit of work is an incident. An inves
 - Canonical `InvestigationToolRegistry` for definitions, exact argument validation, execution, and normalized results.
 - Direct execution by default and an opt-in local MCP stdio transport for three allowlisted capabilities.
 - SQLAlchemy/SQLite persistence with append-oriented run/event history, concurrency protection, and atomic terminal persistence.
-- Structured action proposals, durable human decisions, one approval-gated lab execution capability, and independent post-execution outcome verification.
+- Structured action proposals, durable human decisions, three approval-gated simulated execution capabilities, and independent post-execution outcome verification.
 - Optional application-owned OpenTelemetry spans; persisted events remain the domain source of truth.
 - Isolated backend tests and CI gates for backend, MCP, TypeScript, and production builds.
 
-No real infrastructure is queried. Investigation tools are read-only; the sole execution capability changes only the deterministic lab result and never touches a host process or service.
+No real infrastructure is queried. Investigation tools are read-only; controlled execution changes only deterministic local simulation state and never touches a host process or service.
 
 ## 🎯 Engineering goals
 
@@ -109,7 +109,7 @@ Recovery is explicit and only claims a canonical `RUNNING` reconciliation after 
 
 `GET /action-executions/{execution_id}/attempts/{attempt_id}/reconciliation` returns persisted reconciliation state plus derived `is_stale`, `recoverable`, and typed `recovery_block_reason`. It never observes, recovers, renews a lease, creates events, or changes state. The GET is advisory; the explicit recovery POST always revalidates eligibility.
 
-The operator UI discovers attempt #1 through the side-effect-free canonical-attempt GET, then reads the reconciliation view. It exposes reconciliation only after an explicit click, never retries the mutation, and reports stale recovery eligibility without starting recovery.
+The operator UI discovers attempt #1 through the side-effect-free canonical-attempt GET, then reads the reconciliation view. It exposes reconciliation only after an explicit click, never retries the mutation, and offers stale recovery only when the operational view reports `recoverable=true`; recovery still requires a separate explicit click.
 
 The Action Execution area also presents an Operational Execution Timeline from `GET /action-executions/{execution_id}/timeline`. It is a chronological, read-only projection of the existing persisted audit events for that execution, including attempt, stale assessment, reconciliation, verification, and related human resolution facts when they were actually recorded. It does not infer missing history or alter lifecycle state.
 

@@ -312,4 +312,4 @@ Tracing is off by default. Supported local exporters are `none` and `console`; n
 
 The operator chooses the incident and investigation mode. AI is unavailable in the UI without an OpenAI key. Selecting another incident aborts the browser request/view; it is not a server-side cancellation protocol.
 
-There is currently no authentication, real-system remediation, remote MCP deployment, background queue, or multi-user control plane. Controlled execution is limited to one explicitly approved, deterministic lab action; approval by itself does not execute it.
+There is currently no authentication, real-system remediation, remote MCP deployment, background queue, or multi-user control plane. Controlled execution is limited to the three explicitly allowlisted deterministic lab actions; approval by itself does not execute one.
