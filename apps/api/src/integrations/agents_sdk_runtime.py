@@ -1,4 +1,3 @@
-from collections import Counter
 from dataclasses import dataclass, field
 import json
 from pathlib import Path
@@ -7,12 +6,16 @@ from time import monotonic
 from agents import Agent, FunctionTool, Model, ModelSettings
 from agents.tool_context import ToolContext
 
-from domain.ai import AIInvestigationResult, InvestigationEventType
+from domain.ai import AIInvestigationResult, InvestigationEventType, InvestigationRuntime
 from domain.investigation import InvestigationOrigin
 from repositories.investigation_repository import InvestigationRepository
 from services.tool_registry import InvestigationToolRegistry
 from services.investigation_event_recorder import InvestigationEventRecorder
 from observability.tracing import TraceBoundary
+from services.investigation_runtime_core import (
+    InvestigationRuntimeCore,
+    InvestigationToolLimitError,
+)
 
 
 PROMPT_ROOT = Path(__file__).resolve().parents[2] / "prompts"
@@ -55,10 +58,8 @@ SPECIALIST_TOOL_ALLOWLISTS = {
 }
 
 
-class AgentsSDKToolLimitError(RuntimeError):
-    def __init__(self, code: str, message: str) -> None:
-        super().__init__(message)
-        self.code = code
+class AgentsSDKToolLimitError(InvestigationToolLimitError):
+    pass
 
 
 @dataclass
@@ -70,136 +71,35 @@ class AgentsSDKRunContext:
     max_identical_tool_calls: int
     investigation_id: int | None = None
     tracing: TraceBoundary = field(default_factory=TraceBoundary)
-    total_tool_calls: int = 0
-    repeated_calls: Counter[str] = field(default_factory=Counter)
-    selected_tools: list[str] = field(default_factory=list)
     events: InvestigationEventRecorder | None = None
     tool_turns: dict[str, int] = field(default_factory=dict)
     terminal_tool_error: AgentsSDKToolLimitError | None = None
+    governance: InvestigationRuntimeCore = field(init=False)
+
+    def __post_init__(self) -> None:
+        self.governance = InvestigationRuntimeCore(
+            repository=self.repository,
+            tools=self.tools,
+            incident_id=self.incident_id,
+            investigation_id=self.investigation_id,
+            runtime=InvestigationRuntime.AGENTS_SDK,
+            origin=InvestigationOrigin.AGENTS_SDK,
+            max_tool_calls=self.max_tool_calls,
+            max_identical_tool_calls=self.max_identical_tool_calls,
+            events=self.events,
+            tracing=self.tracing,
+        )
 
     def execute(self, name: str, raw_arguments: str, tool_call_id: str | None) -> str:
         model_turn = self.tool_turns.get(tool_call_id) if tool_call_id else None
-        with self.tracing.span(
-            "supportops.tool.execute",
-            {
-                "supportops.runtime": "agents_sdk",
-                "supportops.tool.name": name,
-                "supportops.tool.call_id": tool_call_id or "unknown",
-                "supportops.model_turn": model_turn or 0,
-                "supportops.tool.transport": self.tools.transport,
-                **(
-                    {"mcp.transport": "stdio"}
-                    if self.tools.transport == "mcp"
-                    else {}
-                ),
-            },
-        ) as tool_span:
-            return self._execute(
-                name, raw_arguments, tool_call_id, model_turn, tool_span
-            )
-
-    def _execute(
-        self,
-        name: str,
-        raw_arguments: str,
-        tool_call_id: str | None,
-        model_turn: int | None,
-        tool_span,
-    ) -> str:
-        started = monotonic()
-        if self.events:
-            self.events.record(
-                InvestigationEventType.TOOL_STARTED,
-                model_turn=model_turn,
-                tool_name=name,
-                tool_call_id=tool_call_id,
-                status="running",
-                metadata={"transport": self.tools.transport},
-            )
-        self.total_tool_calls += 1
-        if self.total_tool_calls > self.max_tool_calls:
-            if self.events:
-                self.events.record(
-                    InvestigationEventType.TOOL_FAILED,
-                    model_turn=model_turn,
-                    tool_name=name,
-                    tool_call_id=tool_call_id,
-                    status="failed",
-                    duration_ms=(monotonic() - started) * 1000,
-                    result_summary="Tool was not executed because the total call limit was reached",
-                    metadata={"transport": self.tools.transport},
-                )
-            error = AgentsSDKToolLimitError(
-                "ai_tool_limit_reached", "Maximum total tool calls reached"
-            )
-            self.terminal_tool_error = error
-            raise error
-        signature = f"{name}:{raw_arguments}"
-        self.repeated_calls[signature] += 1
-        if self.repeated_calls[signature] > self.max_identical_tool_calls:
-            if self.events:
-                self.events.record(
-                    InvestigationEventType.TOOL_FAILED,
-                    model_turn=model_turn,
-                    tool_name=name,
-                    tool_call_id=tool_call_id,
-                    status="failed",
-                    duration_ms=(monotonic() - started) * 1000,
-                    result_summary="Tool was not executed because the identical call limit was reached",
-                    metadata={"transport": self.tools.transport},
-                )
-            error = AgentsSDKToolLimitError(
-                "ai_repeated_call_limit", "Repeated identical tool-call limit reached"
-            )
-            self.terminal_tool_error = error
-            raise error
         try:
-            arguments, result = self.tools.dispatch(name, raw_arguments)
-        except Exception:
-            if self.events:
-                self.events.record(
-                    InvestigationEventType.TOOL_FAILED,
-                    model_turn=model_turn,
-                    tool_name=name,
-                    tool_call_id=tool_call_id,
-                    status="failed",
-                    duration_ms=(monotonic() - started) * 1000,
-                    metadata={"transport": self.tools.transport},
-                )
-            raise
-        for key, value in self.tracing.safe_resource_attributes(arguments).items():
-            tool_span.set_attribute(key, value)
-        record_arguments = {
-            "origin": InvestigationOrigin.AGENTS_SDK,
-            "arguments": arguments,
-        }
-        if self.investigation_id is not None:
-            record_arguments["investigation_id"] = self.investigation_id
-        evidence = self.repository.record_result(
-            self.incident_id, result, **record_arguments
-        )
-        self.selected_tools.append(name)
-        tool_span.set_attribute(
-            "supportops.tool.status", "completed" if result.success else "failed"
-        )
-        if self.events:
-            self.events.record(
-                InvestigationEventType.TOOL_COMPLETED if result.success else InvestigationEventType.TOOL_FAILED,
-                model_turn=model_turn,
-                tool_name=name,
-                tool_call_id=tool_call_id,
-                arguments=arguments,
-                result_summary=f"{result.tool} returned {'evidence' if result.success else 'an application error'} for {result.resource}",
-                status="completed" if result.success else "failed",
-                duration_ms=(monotonic() - started) * 1000,
-                metadata={"transport": self.tools.transport},
-            )
-        return json.dumps(
-            {
-                **result.model_dump(mode="json"),
-                "evidence_id": evidence.id if evidence else None,
-            }
-        )
+            return self.governance.execute(
+                name, raw_arguments, tool_call_id, model_turn
+            ).output
+        except InvestigationToolLimitError as error:
+            sdk_error = AgentsSDKToolLimitError(error.code, str(error))
+            self.terminal_tool_error = sdk_error
+            raise sdk_error from error
 
 
 class ObservableAgentsModel(Model):

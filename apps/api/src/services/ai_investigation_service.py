@@ -1,5 +1,4 @@
 import json
-from collections import Counter
 from time import monotonic
 from typing import Protocol
 
@@ -10,7 +9,6 @@ from domain.ai import (
     AIInvestigationExecution,
     AIInvestigationRead,
     AIInvestigationResult,
-    AIInvestigationStatus,
     FunctionCallOutput,
     ProviderUsage,
     ResponsesTurn,
@@ -26,6 +24,13 @@ from integrations.responses_gateway import ResponsesProviderError
 from repositories.investigation_repository import InvestigationRepository
 from services.tool_registry import InvestigationToolRegistry
 from services.investigation_event_recorder import InvestigationEventRecorder
+from services.investigation_runtime_core import (
+    AIInvestigationError,
+    InvestigationRunSession,
+    InvestigationRuntimeCore,
+    InvestigationToolLimitError,
+    ground_investigation_result,
+)
 from observability.tracing import TraceBoundary
 
 
@@ -37,42 +42,6 @@ class ResponsesClient(Protocol):
     def continue_with_outputs(
         self, previous_response_id: str, outputs: list[FunctionCallOutput]
     ) -> ResponsesTurn: ...
-
-
-class AIInvestigationError(RuntimeError):
-    def __init__(self, code: str, message: str) -> None:
-        super().__init__(message)
-        self.code = code
-
-
-def ground_investigation_result(
-    repository: InvestigationRepository,
-    incident_id: int,
-    investigation_id: int,
-    origin: InvestigationOrigin,
-    result: AIInvestigationResult,
-) -> AIInvestigationResult:
-    evidence_ids = [
-        item.id
-        for item in repository.list_evidence(
-            incident_id, origin, investigation_id
-        )
-    ]
-    update = {
-        "evidence_ids": evidence_ids,
-        "human_action_required": True,
-    }
-    if not evidence_ids:
-        update.update(
-            status=AIInvestigationStatus.INSUFFICIENT_EVIDENCE,
-            confidence=min(result.confidence, 0.25),
-            supporting_evidence=[],
-            missing_information=[
-                *result.missing_information,
-                "No successful tool evidence was collected for this investigation.",
-            ],
-        )
-    return result.model_copy(update=update)
 
 
 class AIInvestigationService:
@@ -116,16 +85,15 @@ class AIInvestigationService:
     def _investigate(self, incident: IncidentRecord) -> AIInvestigationExecution:
         if self._gateway is None:
             raise AIInvestigationError("ai_not_configured", "OpenAI is not configured")
-        run = self._repository.start_ai_run(incident.id, self._gateway.model)
-        events = InvestigationEventRecorder(
-            self._repository, run.id, InvestigationRuntime.MANUAL_RESPONSES
+        session = InvestigationRunSession.start(
+            self._repository,
+            incident.id,
+            self._gateway.model,
+            mode="ai",
+            runtime=InvestigationRuntime.MANUAL_RESPONSES,
         )
-        run_started = monotonic()
-        events.record(
-            InvestigationEventType.RUN_STARTED,
-            model=self._gateway.model,
-            status="running",
-        )
+        run = session.run
+        events = session.events
         usage = ProviderUsage()
         last_response_id: str | None = None
         try:
@@ -133,97 +101,39 @@ class AIInvestigationService:
                 events, 1, lambda: self._gateway.create_initial(self._incident_input(incident))
             )
             iterations = 1
-            total_tool_calls = 0
-            repeated_calls: Counter[str] = Counter()
             usage = self._add_usage(usage, turn.usage)
             last_response_id = turn.response_id
+            governance = InvestigationRuntimeCore(
+                repository=self._repository,
+                tools=self._tools,
+                incident_id=incident.id,
+                investigation_id=run.id,
+                runtime=InvestigationRuntime.MANUAL_RESPONSES,
+                origin=InvestigationOrigin.AI,
+                max_tool_calls=self._max_tool_calls,
+                max_identical_tool_calls=self._max_identical_tool_calls,
+                events=events,
+                tracing=self._tracing,
+            )
 
             while turn.function_calls:
                 if iterations >= self._max_response_iterations:
                     raise AIInvestigationError("ai_loop_limit_reached", "Maximum Responses iterations reached")
                 outputs: list[FunctionCallOutput] = []
                 for call in turn.function_calls:
-                    total_tool_calls += 1
-                    if total_tool_calls > self._max_tool_calls:
-                        raise AIInvestigationError("ai_tool_limit_reached", "Maximum total tool calls reached")
-                    signature = f"{call.name}:{call.arguments}"
-                    repeated_calls[signature] += 1
-                    if repeated_calls[signature] > self._max_identical_tool_calls:
-                        raise AIInvestigationError("ai_repeated_call_limit", "Repeated identical tool-call limit reached")
-                    with self._tracing.span(
-                        "supportops.tool.execute",
-                        {
-                            "supportops.runtime": InvestigationRuntime.MANUAL_RESPONSES.value,
-                            "supportops.tool.name": call.name,
-                            "supportops.tool.call_id": call.call_id,
-                            "supportops.model_turn": iterations,
-                            "supportops.tool.transport": self._tools.transport,
-                            **(
-                                {"mcp.transport": "stdio"}
-                                if self._tools.transport == "mcp"
-                                else {}
-                            ),
-                        },
-                    ) as tool_span:
-                        tool_started = monotonic()
-                        events.record(
-                            InvestigationEventType.TOOL_STARTED,
-                            model_turn=iterations,
-                            tool_name=call.name,
-                            tool_call_id=call.call_id,
-                            status="running",
-                            metadata={"transport": self._tools.transport},
+                    try:
+                        governed = governance.execute(
+                            call.name,
+                            call.arguments,
+                            call.call_id,
+                            iterations,
                         )
-                        try:
-                            arguments, result = self._tools.dispatch(
-                                call.name, call.arguments
-                            )
-                        except Exception:
-                            events.record(
-                                InvestigationEventType.TOOL_FAILED,
-                                model_turn=iterations,
-                                tool_name=call.name,
-                                tool_call_id=call.call_id,
-                                status="failed",
-                                duration_ms=(monotonic() - tool_started) * 1000,
-                                metadata={"transport": self._tools.transport},
-                            )
-                            raise
-                        for key, value in self._tracing.safe_resource_attributes(
-                            arguments
-                        ).items():
-                            tool_span.set_attribute(key, value)
-                        evidence = self._repository.record_result(
-                            incident.id,
-                            result,
-                            origin=InvestigationOrigin.AI,
-                            arguments=arguments,
-                            investigation_id=run.id,
-                        )
-                        tool_status = "completed" if result.success else "failed"
-                        tool_span.set_attribute(
-                            "supportops.tool.status", tool_status
-                        )
-                        events.record(
-                            InvestigationEventType.TOOL_COMPLETED if result.success else InvestigationEventType.TOOL_FAILED,
-                            model_turn=iterations,
-                            tool_name=call.name,
-                            tool_call_id=call.call_id,
-                            arguments=arguments,
-                            result_summary=f"{result.tool} returned {'evidence' if result.success else 'an application error'} for {result.resource}",
-                            status=tool_status,
-                            duration_ms=(monotonic() - tool_started) * 1000,
-                            metadata={"transport": self._tools.transport},
-                        )
+                    except InvestigationToolLimitError as error:
+                        raise AIInvestigationError(error.code, str(error)) from error
                     outputs.append(
                         FunctionCallOutput(
                             call_id=call.call_id,
-                            output=json.dumps(
-                                {
-                                    **result.model_dump(mode="json"),
-                                    "evidence_id": evidence.id if evidence else None,
-                                }
-                            ),
+                            output=governed.output,
                         )
                     )
                 turn = self._model_turn(
@@ -248,59 +158,22 @@ class AIInvestigationService:
                 InvestigationOrigin.AI,
                 result,
             )
-            events.record(
-                InvestigationEventType.FINAL_OUTPUT,
-                model_turn=iterations,
-                response_id=turn.response_id,
-                status=result.status.value,
-                metadata={"confidence": result.confidence},
-            )
-            events.record(
-                InvestigationEventType.RUN_COMPLETED,
-                commit=False,
-                model_turn=iterations,
-                response_id=turn.response_id,
-                model=turn.model,
-                status=result.status.value,
-                duration_ms=(monotonic() - run_started) * 1000,
-            )
-            completed = self._repository.complete_ai_run(
-                run, result, turn.response_id, usage
+            completed = session.complete(
+                result,
+                turn.response_id,
+                usage,
+                turn.model,
+                iterations,
             )
             return self._execution(incident.id, completed)
         except ResponsesProviderError as error:
-            events.record(
-                InvestigationEventType.RUN_FAILED,
-                commit=False,
-                response_id=last_response_id,
-                status="failed",
-                duration_ms=(monotonic() - run_started) * 1000,
-                metadata={"error_code": error.code},
-            )
-            self._repository.fail_ai_run(run, error.code, str(error), last_response_id, usage)
+            session.fail(error.code, str(error), last_response_id, usage)
             raise AIInvestigationError(error.code, str(error)) from error
         except AIInvestigationError as error:
-            events.record(
-                InvestigationEventType.RUN_FAILED,
-                commit=False,
-                response_id=last_response_id,
-                status="failed",
-                duration_ms=(monotonic() - run_started) * 1000,
-                metadata={"error_code": error.code},
-            )
-            self._repository.fail_ai_run(run, error.code, str(error), last_response_id, usage)
+            session.fail(error.code, str(error), last_response_id, usage)
             raise
         except Exception as error:
-            events.record(
-                InvestigationEventType.RUN_FAILED,
-                commit=False,
-                response_id=last_response_id,
-                status="failed",
-                duration_ms=(monotonic() - run_started) * 1000,
-                metadata={"error_code": "ai_investigation_failure"},
-            )
-            self._repository.fail_ai_run(
-                run,
+            session.fail(
                 "ai_investigation_failure",
                 "AI investigation failed",
                 last_response_id,
