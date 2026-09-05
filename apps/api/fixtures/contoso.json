@@ -6,7 +6,8 @@
       {"id":"USR-BOB","display_name":"Bob Martinez","email":"bob@contoso.example","account":{"enabled":true,"locked":false},"groups":["Employees","Sales"],"licenses":["M365-E3"]},
       {"id":"USR-CAROL","display_name":"Carol Chen","email":"carol@contoso.example","account":{"enabled":true,"locked":false},"groups":["Employees","Finance"],"licenses":["M365-E3"]},
       {"id":"USR-DAVID","display_name":"David Okafor","email":"david@contoso.example","account":{"enabled":false,"locked":false},"groups":["Employees"],"licenses":["M365-E3"]},
-      {"id":"USR-ERIN","display_name":"Erin Silva","email":"erin@contoso.example","account":{"enabled":true,"locked":false},"groups":["Employees"],"licenses":[]}
+      {"id":"USR-ERIN","display_name":"Erin Silva","email":"erin@contoso.example","account":{"enabled":true,"locked":false},"groups":["Employees"],"licenses":[]},
+      {"id":"USR-FRANK","display_name":"Frank Wilson","email":"frank@contoso.example","account":{"enabled":true,"locked":true},"groups":["Employees","Support-Users"],"licenses":["M365-E3"]}
     ],
     "mailboxes": [
       {"id":"MBX-SUPPORT","address":"support@contoso.example","display_name":"Support Shared Mailbox","mailbox_type":"shared","quota_gb":50,"used_gb":18,"accepts_external":true,"permissions":[
@@ -67,6 +68,7 @@
     {"catalog_id":"INC-022","title":"Critical service stopped","description":"FileService is stopped on FILE-01.","category":"infrastructure","priority":"critical","requester":"monitoring@contoso.example","affected_resource_type":"host","affected_resource_id":"FILE-01","investigation_context":{"host_id":"FILE-01","service_name":"FileService"}},
     {"catalog_id":"INC-023","title":"API health degraded","description":"Support API latency and errors are elevated.","category":"infrastructure","priority":"critical","requester":"monitoring@contoso.example","affected_resource_type":"application","affected_resource_id":"SUPPORT-API","investigation_context":{"application_id":"SUPPORT-API","host_id":"API-01"}},
     {"catalog_id":"INC-024","title":"Database connection pool exhausted","description":"Contoso database connections are near exhaustion.","category":"infrastructure","priority":"critical","requester":"monitoring@contoso.example","affected_resource_type":"application","affected_resource_id":"CONTOSO-DB","investigation_context":{"application_id":"CONTOSO-DB","host_id":"DB-01"}},
-    {"catalog_id":"INC-025","title":"Server storage critically low","description":"FILE-01 storage usage is critical.","category":"infrastructure","priority":"critical","requester":"monitoring@contoso.example","affected_resource_type":"host","affected_resource_id":"FILE-01","investigation_context":{"host_id":"FILE-01"}}
+    {"catalog_id":"INC-025","title":"Server storage critically low","description":"FILE-01 storage usage is critical.","category":"infrastructure","priority":"critical","requester":"monitoring@contoso.example","affected_resource_type":"host","affected_resource_id":"FILE-01","investigation_context":{"host_id":"FILE-01"}},
+    {"catalog_id":"INC-026","title":"User account locked","description":"Frank cannot sign in because his Contoso account is locked.","category":"identity","priority":"high","requester":"frank@contoso.example","affected_resource_type":"user","affected_resource_id":"USR-FRANK","investigation_context":{"user_id":"USR-FRANK"}}
   ]
 }

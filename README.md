@@ -147,6 +147,16 @@ The resolution API accepts only a persisted `verification_id`, `RESOLVE` or `KEE
 
 One canonical review is allowed per verification, and SQLite permits at most one effective `RESOLVE` record per incident. The decision, incident transition, and audit events commit atomically. No model, agent, MCP tool, remediation capability, shell, subprocess, or external service participates in resolution.
 
+## Golden incident journeys
+
+The Contoso fixture includes three representative end-to-end journeys:
+
+- **API health degraded (`INC-023`)**: application health evidence supports the approved `restart_simulated_service` proposal for `SUPPORT-API`; verification reads application health again.
+- **Database connection pool exhausted (`INC-024`)**: application and host observations support the approved `reset_simulated_application_state` proposal for `CONTOSO-DB`; verification independently observes the recovered application state.
+- **User account locked (`INC-026`)**: `get_user` and `get_account_status` evidence support the approved `unlock_simulated_user` proposal for `USR-FRANK`; verification reads `locked=false` through the account observer.
+
+Each journey starts from a problem state in the deterministic simulation. Read-only evidence is persisted to the investigation run, the proposal is checked against that run, and a human approval is required before the bounded mutation. The physical attempt is persisted, normal acknowledged executions proceed directly to independent verification, and a separate human resolution decision is still required. The same scenarios remain available to deterministic and model-guided investigation paths; neither model runtime executes a mutation during investigation.
+
 ## 🔌 Direct and MCP execution
 
 `TOOL_TRANSPORT=direct` is the default for Responses API and Agents SDK investigations:

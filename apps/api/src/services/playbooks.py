@@ -47,5 +47,14 @@ PLAYBOOKS: dict[str, tuple[PlaybookStep, ...]] = {
         PlaybookStep("get_metrics", {"host_id": "$host_id"}),
         PlaybookStep("get_recent_alerts", {"host_id": "$host_id"}),
     ),
+    "INC-024": (
+        PlaybookStep("get_application_health", {"application_id": "$application_id"}),
+        PlaybookStep("get_host_status", {"host_id": "$host_id"}),
+        PlaybookStep("get_metrics", {"host_id": "$host_id"}),
+        PlaybookStep("get_recent_alerts", {"host_id": "$host_id"}),
+    ),
+    "INC-026": (
+        PlaybookStep("get_user", {"reference": "$user_id"}),
+        PlaybookStep("get_account_status", {"user_id": "$user_id"}),
+    ),
 }
-

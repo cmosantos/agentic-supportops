@@ -23,19 +23,19 @@ def test_seed_is_deterministic_and_idempotent(tmp_path) -> None:
     Base.metadata.create_all(bind=engine)
     sessions = sessionmaker(bind=engine, expire_on_commit=False)
     with sessions() as session:
-        assert seed_catalog(session) == 25
+        assert seed_catalog(session) == 26
         assert seed_catalog(session) == 0
         incidents = list(session.scalars(select(IncidentRecord).order_by(IncidentRecord.catalog_id)))
-        assert len(incidents) == 25
+        assert len(incidents) == 26
         assert incidents[0].catalog_id == "INC-001"
-        assert incidents[-1].catalog_id == "INC-025"
+        assert incidents[-1].catalog_id == "INC-026"
     engine.dispose()
 
 
 def test_reset_restores_known_baseline(tmp_path) -> None:
     engine = create_engine(f"sqlite:///{tmp_path / 'reset.db'}")
     sessions = sessionmaker(bind=engine, expire_on_commit=False)
-    assert reset_simulation(engine, sessions) == 25
+    assert reset_simulation(engine, sessions) == 26
     with sessions() as session:
         session.add(
             IncidentRecord(
@@ -49,8 +49,7 @@ def test_reset_restores_known_baseline(tmp_path) -> None:
             )
         )
         session.commit()
-    assert reset_simulation(engine, sessions) == 25
+    assert reset_simulation(engine, sessions) == 26
     with sessions() as session:
-        assert len(list(session.scalars(select(IncidentRecord)))) == 25
+        assert len(list(session.scalars(select(IncidentRecord)))) == 26
     engine.dispose()
-
