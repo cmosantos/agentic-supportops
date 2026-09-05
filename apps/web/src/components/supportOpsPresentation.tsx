@@ -20,10 +20,10 @@ export function formatTime(value: string | null | undefined): string {
 }
 
 export function toneFor(status: string): string {
-  if (["completed", "approved", "verified", "resolved", "desired_state_observed", "applied_acknowledged"].includes(status)) return "success";
+  if (["completed", "approved", "verified", "resolved", "resolve", "desired_state_observed", "applied_acknowledged"].includes(status)) return "success";
   if (["running", "investigating", "pending", "awaiting_approval"].includes(status)) return "progress";
-  if (["outcome_unknown", "unknown", "not_verified", "inconclusive", "keep_open"].includes(status)) return "warning";
-  if (["failed", "rejected", "undesired_state_observed"].includes(status)) return "danger";
+  if (["outcome_unknown", "unknown", "not_verified", "inconclusive", "keep_open", "high", "medium", "insufficient_evidence"].includes(status)) return "warning";
+  if (["failed", "rejected", "undesired_state_observed", "critical"].includes(status)) return "danger";
   return "neutral";
 }
 

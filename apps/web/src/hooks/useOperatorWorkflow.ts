@@ -90,21 +90,24 @@ export function useOperatorWorkflow({ selected, investigationVersion, onEventsLo
     setActionExecutionAttempt(null);
     setReconciliation(null);
     setReconciliationLookupStatus("idle");
-    if (
-      execution.status !== "outcome_unknown" &&
-      execution.completion_basis !== "reconciliation"
-    ) return;
-    setReconciliationLookupStatus("loading");
+    const needsReconciliation = execution.status === "outcome_unknown" ||
+      execution.completion_basis === "reconciliation";
+    if (needsReconciliation) setReconciliationLookupStatus("loading");
     try {
       const attemptResponse = await supportOpsApi.getExecutionAttempt(execution.id, signal);
       if (!isCurrent()) return;
       if (!attemptResponse.ok) {
-        setReconciliationLookupStatus("error");
-        setProposalError(attemptResponse.error);
+        if (needsReconciliation) {
+          setReconciliationLookupStatus("error");
+          setProposalError(attemptResponse.error);
+        }
         return;
       }
       const attempt: ActionExecutionAttempt = attemptResponse.data;
       setActionExecutionAttempt(attempt);
+      // Display the physical record for every execution. Reconciliation remains
+      // restricted to uncertainty; a known result never triggers its lookup.
+      if (!needsReconciliation) return;
       const reconciliationResponse = await supportOpsApi.getReconciliation(execution.id, attempt.id, signal);
       if (!isCurrent()) return;
       if (reconciliationResponse.status === 404) {
@@ -120,8 +123,10 @@ export function useOperatorWorkflow({ selected, investigationVersion, onEventsLo
       setReconciliationLookupStatus("found");
     } catch {
       if (signal?.aborted || !isCurrent()) return;
-      setReconciliationLookupStatus("error");
-      setProposalError("Unable to load persisted reconciliation state.");
+      if (needsReconciliation) {
+        setReconciliationLookupStatus("error");
+        setProposalError("Unable to load persisted reconciliation state.");
+      }
     }
   }
 

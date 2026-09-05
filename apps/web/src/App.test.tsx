@@ -295,6 +295,63 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+describe("Operator console golden journeys", () => {
+  it.each([
+    { catalog: "INC-023", target: "SUPPORT-API", title: "API degraded", action: "restart_simulated_service", parameters: { service_name: "SupportApi" }, sources: ["get_application_health"], observer: "get_application_health", state: "healthy" },
+    { catalog: "INC-024", target: "CONTOSO-DB", title: "Connection pool exhausted", action: "reset_simulated_application_state", parameters: {}, sources: ["get_application_health", "get_host_status", "get_metrics", "get_recent_alerts"], observer: "get_application_health", state: "healthy" },
+    { catalog: "INC-026", target: "USR-FRANK", title: "Account locked", action: "unlock_simulated_user", parameters: {}, sources: ["get_user", "get_account_status"], observer: "get_account_status", state: "false" },
+  ])("presents $catalog from evidence through explicit human resolution", async (journey) => {
+    const incident = { ...incidents[0], catalog_id: journey.catalog, title: journey.title, affected_resource_id: journey.target };
+    const evidence = journey.sources.map((source, index) => ({
+      ...deterministicEvidence, id: 10 + index, source, resource: journey.target,
+      investigation_id: 20, origin: "ai", payload: { state: journey.state === "false" ? "locked" : "degraded" },
+    }));
+    const proposal = { ...pendingProposal, action_type: journey.action, target: journey.target, parameters: journey.parameters, supporting_evidence_ids: evidence.map(item => item.id) };
+    const execution = { ...completedExecution, capability_name: journey.action, result: { data: { target: journey.target, previous_state: "degraded", current_state: journey.state } } };
+    const verification = { ...verifiedOutcome, expected_outcome: { state: journey.state }, observed_outcome: { state: journey.state }, evidence: { observer: journey.observer, target: journey.target, observed_state: journey.state } };
+    const fetchMock = installFetch({
+      aiConfigured: true, incidentsOverride: [incident],
+      attempt: async () => jsonResponse({ ...canonicalUnknownAttempt, status: "completed", outcome_certainty: "applied_acknowledged", failure_cause: null }),
+      resolution: async (_url, init) => jsonResponse(init?.method === "POST" ? resolvedDecision : []),
+      post: async (url) => {
+        if (url.endsWith("/investigate-ai")) return jsonResponse({ ...actionableExecution, evidence, investigation: { ...actionableExecution.investigation, result: { ...actionableExecution.investigation.result, evidence_ids: evidence.map(item => item.id), proposed_action: proposal } } });
+        if (url.endsWith("/action-proposals")) return jsonResponse(proposal, 201);
+        if (url.endsWith("/approve")) return jsonResponse({ ...proposal, approval_status: "approved" });
+        if (url.endsWith("/execute")) return jsonResponse(execution);
+        if (url.endsWith("/verification")) return jsonResponse({}, 404);
+        if (url.endsWith("/verify")) return jsonResponse(verification);
+        throw new Error(`Unexpected golden journey request: ${url}`);
+      },
+    });
+    render(<App />);
+    await selectIncident(journey.title);
+    await userEvent.click(await screen.findByRole("button", { name: "Run AI investigation" }));
+    await screen.findByRole("button", { name: "Approve" });
+    for (const [index, source] of journey.sources.entries()) {
+      expect(screen.getByText(`#${10 + index} · ${source}`)).toBeVisible();
+    }
+    await userEvent.click(screen.getByRole("button", { name: "Approve" }));
+    expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith("/execute"))).toHaveLength(0);
+    await userEvent.click(await screen.findByRole("button", { name: "Execute approved action" }));
+    expect(await screen.findByText("APPLIED ACKNOWLEDGED")).toBeVisible();
+    expect(screen.queryByRole("complementary", { name: "Uncertain outcome path" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Reconcile state" })).not.toBeInTheDocument();
+    expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith("/reconciliation"))).toHaveLength(0);
+    expect(screen.queryByRole("button", { name: "Resolve incident" })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Verify outcome" }));
+    await userEvent.click(await screen.findByText("Independent observation evidence"));
+    const observation = screen.getByRole("region", { name: "Outcome verification" });
+    expect(observation).toHaveTextContent(journey.observer);
+    expect(observation).toHaveTextContent(journey.target);
+    expect(within(observation).getByText("Observed:").closest("p")).toHaveTextContent(journey.state.toUpperCase());
+    expect(screen.getByText("Incident status:").closest("p")).toHaveTextContent("OPEN");
+    await userEvent.click(screen.getByRole("button", { name: "Resolve incident" }));
+    await waitFor(() => expect(screen.getByText("Incident status:").closest("p")).toHaveTextContent("RESOLVED"));
+    expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith("/execute"))).toHaveLength(1);
+    expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith("/verify"))).toHaveLength(1);
+  });
+});
+
 describe("Agentic SupportOps operator workflow", () => {
   it("shows loading before rendering incidents and backend health", async () => {
     installFetch();

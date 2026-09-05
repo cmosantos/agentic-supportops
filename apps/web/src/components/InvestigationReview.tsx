@@ -105,12 +105,11 @@ export function InvestigationReview({ mode, run, status, result, evidence, steps
       {mode && (
         <div className="review-grid">
           <article className="panel review-assessment">
-            <div className="panel-heading"><h4>Assessment</h4><span className="count">{result ? `${Math.round(result.confidence * 100)}%` : "—"}</span></div>
+            <div className="panel-heading"><div><p className="section-kicker">AI assessment</p><h4>Assessment</h4></div><span className="count">{result ? `${Math.round(result.confidence * 100)}%` : "—"}</span></div>
             {result ? (
               <>
                 <p><b>Summary:</b> {result.summary}</p>
                 <p><b>Assessment:</b> {result.diagnosis}</p>
-                <p><b>Diagnosis:</b> {result.diagnosis}</p>
                 <p><b>Confidence:</b> {Math.round(result.confidence * 100)}%</p>
                 <EvidenceReference label="Evidence references" ids={assessmentEvidenceIds} evidence={scopedEvidence} />
                 {result.supporting_evidence.length > 0 && (
@@ -133,6 +132,7 @@ export function InvestigationReview({ mode, run, status, result, evidence, steps
                 <article className="provenance-item" key={item.id}>
                   <strong>#{item.id} · {item.source}</strong>
                   <small>{item.resource}</small>
+                  <small>{formatTime(item.created_at)} · {displayStatus(item.origin)}</small>
                   <details><summary>Observed payload</summary><pre>{JSON.stringify(item.payload, null, 2)}</pre></details>
                 </article>
               ))

@@ -1,6 +1,6 @@
 import type { Incident } from "../types/supportOps";
 import type { OperatorWorkflow } from "../hooks/useOperatorWorkflow";
-import { StatusBadge, displayAction, displayStatus } from "./supportOpsPresentation";
+import { StatusBadge, displayAction, displayStatus, formatTime } from "./supportOpsPresentation";
 
 type Props = {
   selected: Incident;
@@ -79,8 +79,10 @@ export function ExecutionPanel({ selected, workflow }: Props) {
           </div>
           <p><b>Rationale:</b> {actionProposal.rationale}</p>
           <p><b>Risk level:</b> {actionProposal.risk_level}</p>
-          <p><b>Supporting evidence:</b> {actionProposal.supporting_evidence_ids.map((id) => `#${id}`).join(", ")}</p>
+          <p><b>Supporting evidence:</b> {actionProposal.supporting_evidence_ids.map((id) => <span className="provenance-id" key={id}>#{id}</span>)}</p>
+          <p className="section-kicker">Human governance</p>
           <p><b>Approval state:</b> {displayStatus(actionProposal.approval_status)}</p>
+          {actionProposal.decision_at && <p className="record-stamp">Human decision recorded · {formatTime(actionProposal.decision_at)}</p>}
           {Object.keys(actionProposal.parameters).length > 0 && (
             <dl className="parameter-list">
               {Object.entries(actionProposal.parameters).map(([key, value]) => (
@@ -90,10 +92,10 @@ export function ExecutionPanel({ selected, workflow }: Props) {
           )}
           {actionProposal.approval_status === "pending" && (
             <div className="actions" aria-busy={decidingProposal}>
-              <button disabled={decidingProposal} onClick={() => decideActionProposal("approve")}>
+              <button className="primary-action" disabled={decidingProposal} onClick={() => decideActionProposal("approve")}>
                 {decidingProposal ? "Recording decision…" : "Approve"}
               </button>
-              <button disabled={decidingProposal} onClick={() => decideActionProposal("reject")}>Reject</button>
+              <button className="danger-action" disabled={decidingProposal} onClick={() => decideActionProposal("reject")}>Reject</button>
             </div>
           )}
           {actionProposal.approval_status === "approved" &&
@@ -101,7 +103,7 @@ export function ExecutionPanel({ selected, workflow }: Props) {
               <section className="result-section" aria-label="Approved action execution">
                 <p className="human-control">Approved, awaiting explicit operator execution.</p>
                 <div className="actions" aria-busy={executingAction}>
-                  <button disabled={executingAction} onClick={executeApprovedAction}>
+                  <button className="primary-action" disabled={executingAction} onClick={executeApprovedAction}>
                     {executingAction ? "Execution requested…" : "Execute approved action"}
                   </button>
                 </div>
@@ -118,13 +120,16 @@ export function ExecutionPanel({ selected, workflow }: Props) {
               <div className="panel-heading"><h4>Controlled execution</h4><StatusBadge status={actionExecution.status} /></div>
               <p><b>Capability:</b> {displayAction(actionExecution.capability_name)}</p>
               <p><b>Execution status:</b> {displayStatus(actionExecution.status).toUpperCase()}</p>
+              <p className="record-stamp">Execution #{actionExecution.id} · {formatTime(actionExecution.started_at)}</p>
               {actionExecution.completion_basis && <p><b>Completion basis:</b> {displayStatus(actionExecution.completion_basis)}</p>}
-              {outcomeCertainty && (
+              {actionExecutionAttempt && (
                 <div className="attempt-summary">
-                  <span>Physical attempt</span><StatusBadge status={outcomeCertainty} />
-                  {actionExecutionAttempt && <small>Attempt #{actionExecutionAttempt.id}</small>}
+                  <span>Physical attempt</span><StatusBadge status={outcomeCertainty ?? "not_recorded"} />
+                  <small>Attempt #{actionExecutionAttempt.id} · Invocation {actionExecutionAttempt.attempt_number}</small>
+                  <small>Started · {formatTime(actionExecutionAttempt.invocation_started_at)}</small>
                 </div>
               )}
+              {!actionExecutionAttempt && <p className="empty-state">Physical attempt details are not loaded in this view.</p>}
               {actionExecution.result?.data && (
                 <details><summary>Technical result</summary><pre>{JSON.stringify(actionExecution.result.data, null, 2)}</pre></details>
               )}
@@ -191,7 +196,7 @@ export function ExecutionPanel({ selected, workflow }: Props) {
             <p role="status">Checking reconciliation state…</p>
           )}
           {canReconcile && (
-              <section className="result-section" aria-label="Reconciliation control">
+              <section className="result-section reconciliation-card" aria-label="Reconciliation control">
                 <p className="human-control">
                   Reconciliation performs a read-only observation of current state. It never retries the original mutation.
                 </p>
@@ -203,8 +208,9 @@ export function ExecutionPanel({ selected, workflow }: Props) {
               </section>
             )}
           {reconciliation && (
-            <section className="result-section" aria-label="Reconciliation result">
+            <section className="result-section reconciliation-card" aria-label="Reconciliation result">
               <h4>Reconciliation</h4>
+              <p className="record-stamp">Read-only observer · {reconciliation.observer}</p>
               <p><b>Reconciliation status:</b> {displayStatus(reconciliation.status).toUpperCase()}</p>
               {reconciliation.expected_outcome.state && (
                 <p><b>Expected state:</b> {reconciliation.expected_outcome.state.toUpperCase()}</p>
@@ -242,7 +248,7 @@ export function ExecutionPanel({ selected, workflow }: Props) {
           )}
           {actionExecution?.status === "completed" && !outcomeVerification && (
             <div className="actions" aria-busy={verifyingOutcome}>
-              <button disabled={verifyingOutcome} onClick={verifyOutcome}>
+              <button className="primary-action" disabled={verifyingOutcome} onClick={verifyOutcome}>
                 {verifyingOutcome ? "Checking observed service state…" : "Verify outcome"}
               </button>
             </div>
@@ -254,6 +260,11 @@ export function ExecutionPanel({ selected, workflow }: Props) {
                 <StatusBadge status={outcomeVerification.status} />
               </div>
               <p><b>Verification status:</b> {displayStatus(outcomeVerification.status).toUpperCase()}</p>
+              {actionExecution?.capability_name === "unlock_simulated_user" && <p className="record-stamp">Account lock state · false means unlocked</p>}
+              <p className="record-stamp">Verification #{outcomeVerification.id} · {formatTime(outcomeVerification.completed_at)}</p>
+              {outcomeVerification.evidence && (
+                <details><summary>Independent observation evidence</summary><pre>{JSON.stringify(outcomeVerification.evidence, null, 2)}</pre></details>
+              )}
               <p><b>Expected:</b> {outcomeVerification.expected_outcome.state?.toUpperCase() ?? "UNKNOWN"}</p>
               {outcomeVerification.observed_outcome?.state && (
                 <p><b>Observed:</b> {outcomeVerification.observed_outcome.state.toUpperCase()}</p>
@@ -285,7 +296,7 @@ export function ExecutionPanel({ selected, workflow }: Props) {
                   onChange={(event) => setResolutionReason(event.target.value)}
                 />
                 <div className="actions" aria-busy={decidingResolution}>
-                  <button disabled={decidingResolution} onClick={() => decideResolution("resolve")}>
+                  <button className="primary-action" disabled={decidingResolution} onClick={() => decideResolution("resolve")}>
                     {decidingResolution ? "Recording decision…" : "Resolve incident"}
                   </button>
                   <button disabled={decidingResolution} onClick={() => decideResolution("keep_open")}>
@@ -304,6 +315,7 @@ export function ExecutionPanel({ selected, workflow }: Props) {
           <h3>Resolution History</h3>
           {resolutionDecisions.map((decision) => (
             <article key={decision.id}>
+              <p className="record-stamp">Human decision #{decision.id} · {formatTime(decision.decided_at)}</p>
               <p><b>Decision:</b> {displayStatus(decision.decision).toUpperCase()}</p>
               <p><b>Verification evidence:</b> #{decision.verification_id}</p>
               {decision.reason && <p><b>Reason:</b> {decision.reason}</p>}

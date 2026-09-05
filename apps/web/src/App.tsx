@@ -284,13 +284,16 @@ export function App() {
   }
 
   return (
-    <main>
+    <main id="console">
+      <a className="skip-link" href="#operator-workspace">Skip to operator workspace</a>
       <section className="shell">
         <header className="app-header">
-          <div>
-            <p className="eyebrow">Support operations console</p>
+          <div className="brand">
+            <span className="brand-mark" aria-hidden="true">A<span>•</span></span>
+            <div><p className="eyebrow">Operator Console / Governed AI Operations</p>
             <h1>Agentic SupportOps</h1>
             <p className="summary">Investigate incidents, govern remediation, and verify outcomes.</p>
+            </div>
           </div>
           <div className="system-status" aria-label="System status">
             <div className="health" aria-live="polite">
@@ -301,15 +304,15 @@ export function App() {
                   ? "Backend unavailable"
                   : "Checking backend health…"}
             </div>
-            <span className="system-chip">Transport · HTTP API</span>
+            <span className="system-chip">Contoso simulation</span>
             <span className={aiConfigured ? "system-chip available" : "system-chip"}>
               AI · {aiConfigured ? "available" : "not configured"}
             </span>
           </div>
         </header>
         <div className="workspace">
-          <IncidentList incidents={incidents} selected={selected} onSelect={selectIncident} />
-          <div className="details">
+          <IncidentList incidents={incidents} selected={selected} onSelect={selectIncident} loading={!health && !unavailable} unavailable={unavailable} />
+          <div className="details" id="operator-workspace" tabIndex={-1}>
             {selected ? (
               <>
                 <header className="incident-header">
@@ -329,20 +332,34 @@ export function App() {
                 <p className="sr-only"><b>Incident status:</b> {selected.status.toUpperCase()}</p>
                 <section className="lifecycle" aria-label="Operational lifecycle">
                   {[
-                    ["Investigation", aiMetadata?.status ?? (evidence.length ? "completed" : "not_started")],
-                    ["Proposal", actionProposal?.approval_status ?? "not_started"],
-                    ["Execution", actionExecution?.status ?? "not_started"],
-                    ["Verification", outcomeVerification?.status ?? "not_started"],
-                    ["Resolution", currentResolution?.decision ?? (selected.status === "resolved" ? "resolved" : "open")],
-                  ].map(([label, status]) => (
+                    ["Incident", selected.status, "Intake"],
+                    ["Investigation", investigating ? "running" : aiMetadata?.status ?? (steps.length ? "recorded" : "not_loaded"), "Read-only"],
+                    ["Evidence", evidence.length ? `${evidence.length} records` : "not_loaded", "Observation"],
+                    ["Proposal", actionProposal ? "recorded" : "not_loaded", "AI proposes"],
+                    ["Human Approval", actionProposal?.approval_status ?? "not_loaded", "Human governs"],
+                    ["Execution", actionExecution?.status ?? "not_loaded", "Controlled"],
+                    ["Attempt", !reviewingHistoricalRun ? workflow.actionExecutionAttempt?.status ?? "not_loaded" : "not_loaded", "Physical mutation"],
+                    ["Verification", outcomeVerification?.status ?? "not_loaded", "Independent read"],
+                    ["Human Resolution", currentResolution?.decision ?? "not_loaded", "Human decides"],
+                  ].map(([label, status, owner], index) => (
                     <div className="lifecycle-step" key={label}>
+                      <small>{String(index + 1).padStart(2, "0")} · {owner}</small>
                       <span>{label}</span><StatusBadge status={status} />
                     </div>
                   ))}
                 </section>
+                {!reviewingHistoricalRun && (actionExecution?.status === "outcome_unknown" || actionExecution?.completion_basis === "reconciliation") && (
+                  <aside className="reconciliation-branch" aria-label="Uncertain outcome path">
+                    <span className="branch-icon" aria-hidden="true">↳</span>
+                    <div><strong>Attempt → Outcome uncertain → Reconciliation → Verification</strong>
+                      <p>Independent discovery of current state. The original mutation is never repeated.</p></div>
+                    <StatusBadge status={workflow.reconciliation?.status ?? "outcome_unknown"} />
+                  </aside>
+                )}
+                <p className="lifecycle-note">Each stage has its own record. Not loaded means this view has no record to display.</p>
                 <section className="panel investigation-controls" aria-labelledby="investigation-controls">
                   <div className="panel-heading">
-                    <div><p className="section-kicker">Stage 1</p><h3 id="investigation-controls">Investigation runtimes</h3></div>
+                    <div><p className="section-kicker">Read-only investigation</p><h3 id="investigation-controls">Investigation runtimes</h3></div>
                     <p>Alternative runtimes over the same governed read-only capabilities.</p>
                   </div>
                 <div className="actions" aria-busy={investigating}>
@@ -409,9 +426,15 @@ export function App() {
               </>
             ) : (
               <div className="empty-selection">
-                <span>01</span>
+                <span aria-hidden="true">◎</span>
+                <p className="eyebrow">Evidence first. Human governed.</p>
                 <h2>Select an incident</h2>
                 <p>Choose an item from the queue to review its operational lifecycle.</p>
+                <div className="console-principles">
+                  <div><b>01 / Investigate</b><p>Trace findings back to collected evidence.</p></div>
+                  <div><b>02 / Govern</b><p>Review the proposal and authorize the exact action.</p></div>
+                  <div><b>03 / Prove</b><p>Inspect execution, verify independently, then decide resolution.</p></div>
+                </div>
               </div>
             )}
           </div>
