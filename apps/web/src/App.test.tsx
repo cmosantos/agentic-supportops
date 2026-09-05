@@ -249,6 +249,9 @@ function installFetch(options?: {
     if (url.endsWith("/ai/config")) {
       return jsonResponse({ configured: options?.aiConfigured ?? false });
     }
+    if (url.endsWith("/investigation") && !options?.get) {
+      return jsonResponse({ detail: "No deterministic investigation available" }, 404);
+    }
     if (!init?.method || init.method === "GET") {
       const custom = options?.get ? await options.get(url, init) : undefined;
       if (custom) return custom;
@@ -513,6 +516,68 @@ describe("Agentic SupportOps operator workflow", () => {
     expect(screen.getByText("run completed")).toBeVisible();
     expect(screen.getByRole("heading", { name: "Proposed Action" })).toBeVisible();
     expect(screen.getByRole("heading", { name: "Evidence" })).toBeVisible();
+  });
+
+  it("keeps evidence and proposals isolated when the operator switches between runs", async () => {
+    const secondRun = { ...actionableExecution.investigation, id: 21, mode: "agents_sdk" as const, response_id: "agents-response" };
+    const secondEvidence = { ...deterministicEvidence, id: 11, investigation_id: 21, origin: "agents_sdk" };
+    installFetch({
+      aiConfigured: true,
+      get: async (url) => {
+        if (url.endsWith("/investigation-runs")) return jsonResponse([actionableExecution.investigation, secondRun]);
+        if (url.includes("/investigation-runs/20/artifacts")) return jsonResponse(actionableExecution);
+        if (url.includes("/investigation-runs/21/artifacts")) return jsonResponse({ ...actionableExecution, investigation: secondRun, evidence: [secondEvidence] });
+        if (url.endsWith("/action-proposals")) return jsonResponse([]);
+        if (url.endsWith("/events")) return jsonResponse([]);
+        return undefined;
+      },
+    });
+    render(<App />);
+
+    await selectIncident();
+    const history = screen.getByRole("region", { name: "Investigation history" });
+    const runButtons = within(history).getAllByRole("button");
+    await userEvent.click(runButtons[0]);
+    expect(await screen.findByText("#10 · get_disk_usage")).toBeVisible();
+    await userEvent.click(runButtons[1]);
+    expect(await screen.findByText("#11 · get_disk_usage")).toBeVisible();
+    expect(screen.queryByText("#10 · get_disk_usage")).not.toBeInTheDocument();
+    expect(screen.getAllByText("Agents SDK").length).toBeGreaterThan(0);
+    expect(screen.getByText("No action proposal was recorded for this investigation.")).toBeVisible();
+  });
+
+  it("represents deterministic history without inventing a model assessment", async () => {
+    installFetch({
+      get: async (url) => url.endsWith("/investigation")
+        ? jsonResponse({ incident_id: 1, catalog_id: "INC-001", steps: [{ id: 1, incident_id: 1, investigation_id: null, tool: "get_disk_usage", target_resource: "app-01", status: "completed", evidence_ids: [10], started_at: "2026-08-28T12:10:00Z", completed_at: "2026-08-28T12:10:01Z", error: null }], evidence: [deterministicEvidence] })
+        : undefined,
+    });
+    render(<App />);
+
+    await selectIncident();
+    expect(await screen.findByText("Persisted deterministic result")).toBeVisible();
+    expect(screen.getByText("Deterministic")).toBeVisible();
+    expect(screen.getByText("#10 · get_disk_usage")).toBeVisible();
+    expect(screen.getByText("No model assessment is persisted for this investigation.")).toBeVisible();
+  });
+
+  it("shows a review error without exposing a stale run after artifact loading fails", async () => {
+    installFetch({
+      aiConfigured: true,
+      get: async (url) => {
+        if (url.endsWith("/investigation-runs")) return jsonResponse([actionableExecution.investigation]);
+        if (url.endsWith("/artifacts")) return jsonResponse({ detail: "Artifacts unavailable" }, 503);
+        if (url.endsWith("/events") || url.endsWith("/action-proposals")) return jsonResponse([]);
+        return undefined;
+      },
+    });
+    render(<App />);
+
+    await selectIncident();
+    await userEvent.click(await screen.findByRole("button", { name: /Responses API/ }));
+    expect(await screen.findByText("Historical investigation details could not be loaded")).toBeVisible();
+    expect(screen.queryByText("#10 · get_disk_usage")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Approve|Reject|Execute/ })).not.toBeInTheDocument();
   });
 
   it.each([

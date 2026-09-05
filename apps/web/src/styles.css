@@ -190,8 +190,22 @@ button:disabled { opacity: .52; cursor: not-allowed; }
 .history-panel { background: var(--surface-subtle); }
 .run-history { display: grid; gap: .45rem; }
 .history-item { display: flex; align-items: center; justify-content: space-between; gap: 1rem; text-align: left; }
+.history-item.selected { border-color: var(--blue); background: #eef4ff; box-shadow: 0 0 0 1px var(--blue); }
 .history-item span:first-child { display: grid; gap: .15rem; }
 .history-item small { display: block; }
+.investigation-review { display: grid; gap: 1rem; margin-top: 1rem; }
+.review-header { border-left: 4px solid #6574a6; background: #f8f9fc; }
+.review-metadata { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .75rem; margin: .85rem 0 0; }
+.review-metadata div { padding: .65rem; border: 1px solid var(--line); border-radius: .4rem; background: white; }
+.review-metadata dt { color: var(--muted); font-size: .7rem; font-weight: 750; text-transform: uppercase; }
+.review-metadata dd { margin: .2rem 0 0; font-weight: 650; }
+.review-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
+.review-grid > .panel { min-width: 0; }
+.provenance-item { display: grid; gap: .2rem; margin-top: .65rem; padding: .75rem; border: 1px solid var(--line); border-radius: .4rem; background: var(--surface-subtle); }
+.provenance-item small { color: var(--muted); }
+.provenance-id { display: inline-block; margin-right: .35rem; padding: .15rem .35rem; border-radius: .25rem; background: #e8f1ff; color: var(--blue); font-weight: 700; }
+.provenance-id.missing { background: var(--warning-bg); color: #684700; }
+.review-proposal { border-left: 4px solid var(--blue); }
 .diagnosis { border-left: 4px solid #6574a6; background: #f8f9fc; }
 .diagnosis-heading { display: flex; justify-content: space-between; gap: 1rem; }
 .diagnosis-heading small { text-transform: capitalize; }
@@ -243,6 +257,7 @@ pre { overflow: auto; padding: .8rem; border: 1px solid #e0e4ea; border-radius: 
   .incident-facts div:nth-child(2) { border-right: 0; }
   .incident-facts div:nth-child(-n + 2) { border-bottom: 1px solid var(--line); }
   .lifecycle { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .review-metadata, .review-grid { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 620px) {

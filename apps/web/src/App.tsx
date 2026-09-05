@@ -1,6 +1,8 @@
 import { IncidentList } from "./components/IncidentList";
 import { ExecutionPanel } from "./components/ExecutionPanel";
-import { StatusBadge, displayStatus, formatTime, toneFor } from "./components/supportOpsPresentation";
+import { InvestigationHistory } from "./components/InvestigationHistory";
+import { InvestigationReview, type InvestigationReviewMode } from "./components/InvestigationReview";
+import { StatusBadge, formatTime } from "./components/supportOpsPresentation";
 import { useOperatorWorkflow } from "./hooks/useOperatorWorkflow";
 import { supportOpsApi } from "./api/supportOpsApi";
 import { useEffect, useRef, useState } from "react";
@@ -37,7 +39,13 @@ export function App() {
   const [investigationRuns, setInvestigationRuns] = useState<InvestigationRun[]>([]);
   const [events, setEvents] = useState<InvestigationEvent[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [selectedRunId, setSelectedRunId] = useState<number | null>(null);
+  const [reviewLoading, setReviewLoading] = useState(false);
+  const [reviewError, setReviewError] = useState<string | null>(null);
+  const [reviewingHistoricalRun, setReviewingHistoricalRun] = useState(false);
   const investigationRequest = useRef<AbortController | null>(null);
+  const reviewRequest = useRef<AbortController | null>(null);
+  const reviewVersion = useRef(0);
   const investigationVersion = useRef(0);
   const workflow = useOperatorWorkflow({
     selected,
@@ -51,6 +59,16 @@ export function App() {
     },
   });
   const { actionProposal, actionExecution, outcomeVerification, currentResolution } = workflow;
+  const reviewRun = selectedRunId === null
+    ? null
+    : investigationRuns.find((run) => run.id === selectedRunId) ?? null;
+  const reviewMode: InvestigationReviewMode | null = mode === "deterministic"
+    ? "deterministic"
+    : mode === "agents_sdk"
+      ? "agents_sdk"
+      : mode === "ai"
+        ? "ai"
+        : null;
 
   useEffect(() => {
     const controller = new AbortController();
@@ -97,8 +115,11 @@ export function App() {
 
   function selectIncident(incident: Incident) {
     investigationRequest.current?.abort();
+    reviewRequest.current?.abort();
     investigationRequest.current = null;
+    reviewRequest.current = null;
     investigationVersion.current += 1;
+    reviewVersion.current += 1;
     setSelected(incident);
     setEvidence([]);
     setSteps([]);
@@ -107,6 +128,10 @@ export function App() {
     setInvestigationRuns([]);
     setEvents([]);
     setHistoryLoading(true);
+    setSelectedRunId(null);
+    setReviewLoading(false);
+    setReviewError(null);
+    setReviewingHistoricalRun(false);
     workflow.reset();
     setMode(null);
     setInvestigationError(null);
@@ -125,19 +150,36 @@ export function App() {
       .finally(() => {
         if (selectionVersion === investigationVersion.current) setHistoryLoading(false);
       });
+    void supportOpsApi.getInvestigation(reference)
+      .then((response) => {
+        if (selectionVersion !== investigationVersion.current || !response.ok) return;
+        setEvidence(response.data.evidence);
+        setSteps(response.data.steps);
+        setAiResult(null);
+        setAiMetadata(null);
+        setMode("deterministic");
+      })
+      .catch(() => undefined);
   }
 
   async function loadRun(run: InvestigationRun) {
     if (!selected) return;
+    reviewRequest.current?.abort();
+    const controller = new AbortController();
+    reviewRequest.current = controller;
     const version = investigationVersion.current;
+    const runVersion = ++reviewVersion.current;
     const reference = selected.catalog_id ?? selected.id;
-    setHistoryLoading(true);
+    setReviewLoading(true);
+    setReviewError(null);
+    setSelectedRunId(run.id);
+    setReviewingHistoricalRun(true);
     workflow.setProposalError(null);
     try {
       const [artifactsResponse, eventsResponse, proposalsResponse] = await Promise.all([
-        supportOpsApi.getArtifacts(reference, run.id),
-        supportOpsApi.getEvents(reference, run.id),
-        supportOpsApi.getProposals(reference, run.id),
+        supportOpsApi.getArtifacts(reference, run.id, controller.signal),
+        supportOpsApi.getEvents(reference, run.id, controller.signal),
+        supportOpsApi.getProposals(reference, run.id, controller.signal),
       ]);
       if (!artifactsResponse.ok || !eventsResponse.ok || !proposalsResponse.ok) {
         throw new Error("Historical investigation details could not be loaded");
@@ -145,7 +187,7 @@ export function App() {
       const artifacts: AIExecution = artifactsResponse.data;
       const historicalEvents: InvestigationEvent[] = eventsResponse.data;
       const proposals: ActionProposal[] = proposalsResponse.data;
-      if (version !== investigationVersion.current) return;
+      if (version !== investigationVersion.current || runVersion !== reviewVersion.current) return;
       setEvidence(artifacts.evidence);
       setSteps(artifacts.steps);
       setAiResult(artifacts.investigation.result);
@@ -154,11 +196,13 @@ export function App() {
       setEvents(historicalEvents);
       workflow.showHistoricalProposal(proposals.at(-1) ?? null);
     } catch (error: unknown) {
-      if (version === investigationVersion.current) {
-        workflow.setProposalError(error instanceof Error ? error.message : "History loading failed");
+      if (!controller.signal.aborted && version === investigationVersion.current && runVersion === reviewVersion.current) {
+        setReviewError(error instanceof Error ? error.message : "History loading failed");
       }
     } finally {
-      if (version === investigationVersion.current) setHistoryLoading(false);
+      if (!controller.signal.aborted && version === investigationVersion.current && runVersion === reviewVersion.current) {
+        setReviewLoading(false);
+      }
     }
   }
 
@@ -166,10 +210,16 @@ export function App() {
     if (!selected || investigationRequest.current) return;
 
     const controller = new AbortController();
+    reviewRequest.current?.abort();
+    reviewRequest.current = null;
+    reviewVersion.current += 1;
     const requestVersion = ++investigationVersion.current;
     investigationRequest.current = controller;
     setInvestigating(true);
     setInvestigationError(null);
+    setReviewError(null);
+    setReviewingHistoricalRun(false);
+    setSelectedRunId(null);
     setEvidence([]);
     setSteps([]);
     setAiResult(null);
@@ -198,6 +248,7 @@ export function App() {
           status: result.investigation.status,
           model: result.investigation.model,
         });
+        setSelectedRunId(result.investigation.id);
         setInvestigationRuns((current) => [
           result.investigation,
           ...current.filter((item) => item.id !== result.investigation.id),
@@ -217,6 +268,7 @@ export function App() {
         if (requestVersion !== investigationVersion.current) return;
         setEvidence(result.evidence);
         setSteps(result.steps);
+        setSelectedRunId(null);
       }
     } catch (error: unknown) {
       if (controller.signal.aborted || requestVersion !== investigationVersion.current) return;
@@ -334,112 +386,26 @@ export function App() {
                 {mode && !investigating && <p className="mode">Mode: {mode}</p>}
                 {investigationError && <p className="error">{investigationError}</p>}
                 </section>
-                <section className="panel history-panel" aria-labelledby="investigation-history">
-                  <div className="panel-heading">
-                    <div><p className="section-kicker">Persisted record</p><h3 id="investigation-history">Investigation history</h3></div>
-                    <span className="muted">{historyLoading ? "Loading…" : `${investigationRuns.length} runs`}</span>
-                  </div>
-                  {investigationRuns.length === 0 && !historyLoading ? (
-                    <p className="empty-state">No model investigation runs have been recorded for this incident.</p>
-                  ) : (
-                    <div className="run-history">
-                      {investigationRuns.map((run) => (
-                        <button className="history-item" key={run.id} onClick={() => loadRun(run)}>
-                          <span>
-                            <strong>{run.mode === "agents_sdk" ? "Agents SDK" : "Responses API"}</strong>
-                            <small>{formatTime(run.created_at)}</small>
-                          </span>
-                          <StatusBadge status={run.status} />
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </section>
-                {aiResult && (
-                  <article className="panel diagnosis">
-                    <div className="diagnosis-heading">
-                      <strong>Investigation assessment</strong>
-                      {aiMetadata && (
-                        <small>
-                          {displayStatus(aiMetadata.status)} · {aiMetadata.model}
-                        </small>
-                      )}
-                    </div>
-                    <p>{aiResult.summary}</p>
-                    <p><b>Assessment:</b> {aiResult.diagnosis}</p>
-                    <p><b>Confidence:</b> {Math.round(aiResult.confidence * 100)}%</p>
-                    {aiResult.supporting_evidence.length > 0 && (
-                      <section className="result-section">
-                        <b>Supporting evidence</b>
-                        <ul>{aiResult.supporting_evidence.map((item) => <li key={item}>{item}</li>)}</ul>
-                      </section>
-                    )}
-                    {aiResult.evidence_ids.length > 0 && (
-                      <p><b>Evidence references:</b> {aiResult.evidence_ids.map((id) => `#${id}`).join(", ")}</p>
-                    )}
-                    <section className="result-section">
-                      <b>Recommended next steps</b>
-                      <ul>{aiResult.recommended_next_steps.map((item) => <li key={item}>{item}</li>)}</ul>
-                    </section>
-                    {aiResult.missing_information.length > 0 && (
-                      <section className="result-section">
-                        <b>Missing information</b>
-                        <ul>{aiResult.missing_information.map((item) => <li key={item}>{item}</li>)}</ul>
-                      </section>
-                    )}
-                    {aiResult.human_action_required && (
-                      <p className="human-control">
-                        Human action required — this investigation recommends next steps but does not execute remediation.
-                      </p>
-                    )}
-                  </article>
-                )}
-                <ExecutionPanel selected={selected} workflow={workflow} />
-                {steps.length > 0 && (
-                  <section className="panel" aria-labelledby="investigation-steps">
-                    <h3 id="investigation-steps">Investigation</h3>
-                    <ul>
-                      {steps.map((step) => (
-                        <li key={step.id}>{step.tool} · {step.target_resource} · {displayStatus(step.status)}</li>
-                      ))}
-                    </ul>
-                  </section>
-                )}
-                {evidence.length > 0 && (
-                  <section className="panel evidence-panel" aria-labelledby="investigation-evidence">
-                    <div className="panel-heading">
-                      <div><p className="section-kicker">Factual observations</p><h3 id="investigation-evidence">Evidence</h3></div>
-                      <span className="count">{evidence.length}</span>
-                    </div>
-                    {evidence.map((item) => (
-                      <article key={item.id}>
-                        <strong>#{item.id} · {item.source}</strong>
-                        <small>{item.resource}</small>
-                        <details><summary>Observed payload</summary><pre>{JSON.stringify(item.payload, null, 2)}</pre></details>
-                      </article>
-                    ))}
-                  </section>
-                )}
-                {events.length > 0 && (
-                  <section className="panel timeline-panel" aria-labelledby="operational-timeline">
-                    <div className="panel-heading">
-                      <div><p className="section-kicker">Persisted lifecycle</p><h3 id="operational-timeline">Operational timeline</h3></div>
-                      <span className="count">{events.length}</span>
-                    </div>
-                    <ol className="timeline">
-                      {events.map((event) => (
-                        <li key={event.id}>
-                          <span className={`timeline-marker ${toneFor(event.status ?? event.event_type)}`} />
-                          <div>
-                            <strong>{displayStatus(event.event_type)}</strong>
-                            <small>{formatTime(event.timestamp)} · {displayStatus(event.runtime)}</small>
-                          </div>
-                          {event.status && <StatusBadge status={event.status} />}
-                        </li>
-                      ))}
-                    </ol>
-                  </section>
-                )}
+                <InvestigationHistory
+                  runs={investigationRuns}
+                  loading={historyLoading}
+                  selectedRunId={selectedRunId}
+                  onSelect={loadRun}
+                />
+                <InvestigationReview
+                  mode={reviewMode}
+                  run={reviewRun}
+                  status={aiMetadata?.status ?? null}
+                  result={aiResult}
+                  evidence={evidence}
+                  steps={steps}
+                  events={events}
+                  proposal={reviewingHistoricalRun ? actionProposal : null}
+                  loading={reviewLoading}
+                  error={reviewError}
+                  includeProposal={reviewingHistoricalRun}
+                />
+                {!reviewingHistoricalRun && <ExecutionPanel selected={selected} workflow={workflow} />}
               </>
             ) : (
               <div className="empty-selection">
