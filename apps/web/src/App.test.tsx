@@ -229,9 +229,9 @@ function installFetch(options?: {
   coreFailure?: boolean;
   aiConfigured?: boolean;
   incidentsOverride?: readonly unknown[];
+  timeline?: (url: string, init?: RequestInit) => Promise<Response>;
   attempt?: (url: string, init?: RequestInit) => Promise<Response>;
   execution?: (url: string, init?: RequestInit) => Promise<Response>;
-  timeline?: (url: string, init?: RequestInit) => Promise<Response>;
   proposals?: (url: string, init?: RequestInit) => Promise<Response>;
   reconciliation?: (url: string, init?: RequestInit) => Promise<Response>;
   resolution?: (url: string, init?: RequestInit) => Promise<Response>;
@@ -969,6 +969,58 @@ describe("Agentic SupportOps operator workflow", () => {
     expect(screen.queryByRole("button", { name: "Reconcile state" })).not.toBeInTheDocument();
   });
 
+  it.each([404, 503])("does not use audit attempt IDs when canonical attempt lookup returns %s", async (status) => {
+    const fetchMock = installFetch({
+      aiConfigured: true,
+      proposals: async () => jsonResponse([approvedExecutableProposal]),
+      execution: async () => jsonResponse(outcomeUnknownExecution),
+      attempt: async () => jsonResponse({ detail: "Canonical attempt unavailable" }, status),
+      timeline: async () => jsonResponse(executionTimeline),
+      get: async (url) => url.endsWith("/events") ? jsonResponse([{
+        id: 91, investigation_id: 20, runtime: "manual_responses",
+        event_type: "execution_attempt_outcome_unknown", sequence: 5,
+        status: "outcome_unknown", timestamp: "2026-08-28T12:14:02Z",
+        metadata: { attempt_id: 77, outcome_certainty: "unknown" },
+      }]) : undefined,
+      post: async (url) => {
+        if (url.endsWith("/investigate-ai")) return jsonResponse(actionableExecution);
+        throw new Error(`Unexpected request: ${url}`);
+      },
+    });
+    render(<App />);
+    await selectIncident();
+    await userEvent.click(await screen.findByRole("button", { name: "Run AI investigation" }));
+
+    expect(await screen.findByText("Canonical attempt unavailable")).toBeVisible();
+    expect(await screen.findByRole("region", { name: "Execution Timeline" })).toHaveTextContent("Attempt #51");
+    expect(screen.queryByRole("button", { name: /reconcile|retry|execute approved|verify outcome/i })).not.toBeInTheDocument();
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/attempts/"))).toBe(false);
+  });
+
+  it("ignores a canonical attempt response after the operator selects another incident", async () => {
+    let finishAttempt!: (response: Response) => void;
+    const pendingAttempt = new Promise<Response>((resolve) => { finishAttempt = resolve; });
+    const fetchMock = installFetch({
+      aiConfigured: true,
+      proposals: async () => jsonResponse([approvedExecutableProposal]),
+      execution: async () => jsonResponse(outcomeUnknownExecution),
+      attempt: async () => pendingAttempt,
+      post: async (url) => {
+        if (url.endsWith("/investigate-ai")) return jsonResponse(actionableExecution);
+        throw new Error(`Unexpected request: ${url}`);
+      },
+    });
+    render(<App />);
+    await selectIncident();
+    await userEvent.click(await screen.findByRole("button", { name: "Run AI investigation" }));
+    await screen.findByText("Checking reconciliation state…");
+    await userEvent.click(screen.getByRole("button", { name: /INC-002/ }));
+    finishAttempt(jsonResponse(canonicalUnknownAttempt));
+    await waitFor(() => expect(screen.queryByText("Execution status:")).not.toBeInTheDocument());
+    expect(screen.queryByRole("button", { name: "Reconcile state" })).not.toBeInTheDocument();
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/attempts/"))).toBe(false);
+  });
+
   it("submits one explicit reconciliation request despite duplicate clicks", async () => {
     let resolveReconciliation!: (response: Response) => void;
     const pendingReconciliation = new Promise<Response>((resolve) => { resolveReconciliation = resolve; });
@@ -1060,7 +1112,7 @@ describe("Agentic SupportOps operator workflow", () => {
 
     expect(await screen.findByText(/reconciliation appears stale/i)).toBeVisible();
     expect(screen.getByText(/explicit recovery is available as a separate operation/i)).toBeVisible();
-    expect(screen.getByRole("button", { name: "Recover stale reconciliation" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: /recover/i })).not.toBeInTheDocument();
     expect(fetchMock.mock.calls.filter(([url]) => String(url).includes("/recover"))).toHaveLength(0);
   });
 
@@ -1175,9 +1227,8 @@ describe("Agentic SupportOps operator workflow", () => {
       completion_basis: null,
       error: { code: "capability_outcome_unknown", message: "Outcome could not be acknowledged" },
     };
-    installFetch({
+    const fetchMock = installFetch({
       aiConfigured: true,
-      attempt: async () => jsonResponse({ ...canonicalUnknownAttempt, id: 77 }),
       get: async (url) => {
         if (url.endsWith("/events")) {
           return jsonResponse([{
@@ -1188,7 +1239,7 @@ describe("Agentic SupportOps operator workflow", () => {
             sequence: 5,
             status: "outcome_unknown",
             timestamp: "2026-08-28T12:14:02Z",
-            metadata: {},
+            metadata: { attempt_id: 77, outcome_certainty: "unknown" },
           }]);
         }
         return undefined;
@@ -1201,7 +1252,7 @@ describe("Agentic SupportOps operator workflow", () => {
         if (url.endsWith("/reconcile")) {
           return jsonResponse({
             id: 80,
-            attempt_id: 77,
+            attempt_id: 51,
             execution_id: 50,
             status: "desired_state_observed",
             observer: "get_application_health",
@@ -1226,9 +1277,11 @@ describe("Agentic SupportOps operator workflow", () => {
     expect(screen.getByText(/automatic retry is unsafe/)).toBeVisible();
     expect(screen.queryByRole("button", { name: /execute approved/i })).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Reconcile state" }));
-    expect(await screen.findByRole("region", { name: "Reconciliation" })).toHaveTextContent(
+    expect(await screen.findByRole("region", { name: "Reconciliation result" })).toHaveTextContent(
       "DESIRED STATE OBSERVED",
     );
+    expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith("/attempts/51/reconcile"))).toHaveLength(1);
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/attempts/77/"))).toBe(false);
   });
 
   it.each([
