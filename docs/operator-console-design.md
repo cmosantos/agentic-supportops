@@ -1,8 +1,14 @@
 # Operator Console presentation
 
+The design is operator-first: the selected incident, current state, next action, assessment, and evidence carry the strongest hierarchy. Progressive disclosure keeps provenance, investigation activity, audit timeline, raw payloads, and diagnostic metadata available without competing with the operational decision.
+
 The console uses dark surfaces, purple emphasis, readable status labels, and separate visual treatments for investigation, human governance, controlled execution, and independent verification. The queue remains the entry point. No framework, dependency, API contract, domain rule, or backend implementation was changed.
 
+The primary operator view keeps one current state, one next action, and one dominant action. Runtime choice is a separate compact selector for the next investigation; the run action remains a single purple control, while the last executed runtime remains provenance rather than selection state. Technical history, activity, audit events, raw payloads, and deep metadata are grouped behind progressive disclosure.
+
 ## Operational records
+
+Trust is evidence-first and governance remains visible at the point of decision. Execution and physical attempt stay distinct, verification is an independent read, and reconciliation is an exceptional read-only path for uncertain outcomes rather than a permanent workflow stage.
 
 The overview presents Incident → Investigation → Evidence → Proposal → Human Approval → Execution → Attempt → Verification → Human Resolution. It reads the resources already held by the application, without storing a second workflow state. `Not loaded` describes an absent record in this view, not proof that a stage never occurred. Historical investigation review remains a read-only review of that run.
 
@@ -11,6 +17,8 @@ The existing canonical attempt GET now also supplies physical-attempt presentati
 Reconciliation is a separate amber branch only for `outcome_unknown` or an execution whose persisted completion basis is `reconciliation`. Its controls retain the existing eligibility checks. An acknowledged normal execution never gains a reconciliation stage. Completed reconciliation does not rewrite the original attempt's uncertainty.
 
 Proposal evidence IDs, evidence source/resource/time, human decision time, execution ID, attempt ID and invocation number, verification evidence, and human resolution records are visible at their corresponding boundaries. Payloads remain expandable. Approval, execution, verification, and resolution remain separate explicit operations.
+
+The lifecycle stepper uses quiet indicators rather than repeated status pills. Proposal and approval remain distinct: the proposal is actionable intent, approval is the human authorization boundary, execution is the governed record, and attempt is the physical mutation record. Verification presents expected, observed, and result as independent proof; human resolution remains an explicit final decision.
 
 ## Accessibility and responsive layout
 
