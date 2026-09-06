@@ -987,7 +987,7 @@ describe("Agentic SupportOps operator workflow", () => {
     ["Approve", "approved"],
     ["Reject", "rejected"],
   ])("renders a pending proposal and records %s without execution", async (decision, status) => {
-    installFetch({
+    const fetchMock = installFetch({
       aiConfigured: true,
       post: async (url) => {
         if (url.endsWith("/investigate-ai")) return jsonResponse(actionableExecution);
@@ -1007,10 +1007,17 @@ describe("Agentic SupportOps operator workflow", () => {
     await selectIncident();
     await runInvestigation("ai");
 
-    expect(await screen.findByRole("heading", { name: "Proposed Action" })).toBeVisible();
-    expect(screen.getByText("Action type:").closest("div")).toHaveTextContent("Reset simulated application state");
-    expect(screen.getByText("Supporting evidence:").closest("p")).toHaveTextContent("#10");
+    expect(await screen.findByRole("heading", { name: "Proposed action" })).toBeVisible();
+    const proposalSurface = screen.getByRole("heading", { name: "Review the exact proposed operation" }).closest(".action-summary");
+    expect(proposalSurface).not.toBeNull();
+    const proposal = within(proposalSurface as HTMLElement);
+    expect(proposal.getByText("Proposed action", { selector: "dt" }).closest("div")).toHaveTextContent("Reset simulated application state");
+    expect(proposal.getByText("Target", { selector: "dt" }).closest("div")).toHaveTextContent("SUPPORT-API");
+    expect(proposal.getByText("Risk", { selector: "dt" }).closest("div")).toHaveTextContent("MEDIUM");
+    expect(screen.getByRole("heading", { name: "Evidence supporting this proposal" }).parentElement).toHaveTextContent("#10");
     expect(screen.getByText("Approval state:").closest("p")).toHaveTextContent("pending");
+    expect(screen.getByRole("button", { name: "Approve" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Reject" })).toBeVisible();
     expect(screen.queryByRole("button", { name: /execute/i })).not.toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: decision }));
@@ -1021,6 +1028,15 @@ describe("Agentic SupportOps operator workflow", () => {
     expect(screen.queryByRole("button", { name: "Approve" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Reject" })).not.toBeInTheDocument();
     expect(screen.getByText(/execution remains policy-controlled/)).toBeVisible();
+    expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith(`/${decision.toLowerCase()}`))).toHaveLength(1);
+    expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith("/execute"))).toHaveLength(0);
+    if (status === "approved") {
+      expect(screen.getByText(/Approved — awaiting explicit operator execution/)).toBeVisible();
+      expect(screen.getByRole("button", { name: "Execute approved action" })).toBeVisible();
+    } else {
+      expect(screen.getByText("Proposal rejected.", { selector: "strong" })).toBeVisible();
+      expect(screen.queryByRole("button", { name: "Execute approved action" })).not.toBeInTheDocument();
+    }
   });
 
   it("renders an already persisted proposal without recreating it", async () => {
@@ -1037,8 +1053,10 @@ describe("Agentic SupportOps operator workflow", () => {
     await selectIncident();
     await runInvestigation("ai");
 
-    expect(await screen.findByRole("heading", { name: "Proposed Action" })).toBeVisible();
-    expect(screen.getByText("Bounded parameters").parentElement).toHaveTextContent('"service_name": "SupportApi"');
+    expect(await screen.findByRole("heading", { name: "Proposed action" })).toBeVisible();
+    expect(screen.getByText("service name", { selector: "dt" }).closest("div")).toHaveTextContent("SupportApi");
+    expect(screen.getByRole("heading", { name: "Evidence supporting this proposal" }).parentElement).toHaveTextContent("#10");
+    expect(screen.getByText("Raw parameter JSON").parentElement).toHaveTextContent('"service_name": "SupportApi"');
     expect(fetchMock.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(1);
   });
 
@@ -1147,7 +1165,7 @@ describe("Agentic SupportOps operator workflow", () => {
     await runInvestigation("ai");
     await userEvent.click(await screen.findByRole("button", { name: "Approve" }));
 
-    expect(await screen.findByText(/Approved, awaiting explicit operator execution/)).toBeVisible();
+    expect(await screen.findByText(/Approved — awaiting explicit operator execution/)).toBeVisible();
     expect(screen.getByRole("button", { name: "Execute approved action" })).toBeVisible();
     expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith("/execute"))).toHaveLength(0);
   });

@@ -219,12 +219,36 @@ pre { max-height: 20rem; overflow: auto; padding: .7rem; border: 1px solid var(-
 .phase-header h3 { margin: 0; color: var(--ink); font-size: 1.15rem; }
 .action-summary, .outcome-summary { padding: .8rem; border: 1px solid var(--line); background: #17141d; }
 .action-summary h4, .outcome-summary h4 { margin: 0; color: var(--ink); font-size: .98rem; }
+.proposal-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; }
+.proposal-heading > p { max-width: 22rem; margin: .05rem 0 0; color: var(--warning); font-size: .68rem; font-weight: 700; text-align: right; }
+.proposal-overview { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0; margin: .8rem 0 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.proposal-overview > div { min-width: 0; padding: .7rem .75rem; border-left: 1px solid var(--line); }
+.proposal-overview > div:first-child { padding-left: 0; border-left: 0; }
+.proposal-overview dd { text-transform: none; }
+.proposal-overview .proposal-primary dd { color: #f3ebfb; font-size: .87rem; }
+.proposal-context { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(14rem, .65fr); gap: 1.2rem; padding: .85rem 0; }
+.proposal-context section { min-width: 0; }
+.proposal-context h5, .proposal-parameters h5 { margin: 0; color: var(--ink); font-size: .8rem; }
+.proposal-evidence-ids { display: flex; flex-wrap: wrap; gap: .3rem; margin: .55rem 0 0; }
+.proposal-evidence-ids .provenance-id { margin: 0; }
+.proposal-parameters { padding-top: .8rem; border-top: 1px solid var(--line); }
+.proposal-parameters-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 1rem; }
+.proposal-parameters-heading small { max-width: 24rem; text-align: right; }
+.parameter-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .45rem; margin: .65rem 0 0; }
+.parameter-list div { min-width: 0; padding: .55rem .6rem; border-left: 2px solid #6b4c98; background: #141119; }
+.parameter-list dd { font-family: ui-monospace, Consolas, monospace; overflow-wrap: anywhere; text-transform: none; }
+.empty-parameters { margin: .55rem 0 0; color: var(--muted); font-size: .74rem; }
+.proposal-raw-details { margin-top: .7rem; }
 .compact-details { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .45rem .9rem; margin: .75rem 0; }
 .compact-details div { min-width: 0; }
-.action-rationale { margin: .7rem 0; color: #cfc5d4; font-size: .8rem; }
+.action-rationale { margin: .45rem 0 0; color: #cfc5d4; font-size: .78rem; }
 .governance-state { margin-top: .7rem; padding: .75rem; border-left: 3px solid var(--line); background: #141119; }
 .governance-state.governance-pending { border-left-color: var(--warning); background: var(--warning-bg); }
+.governance-state.governance-approved { border-left-color: var(--success); background: var(--success-bg); }
+.governance-state.governance-rejected { border-left-color: var(--warning); background: #211a12; }
+.governance-state h4 { margin: 0; color: var(--ink); font-size: .92rem; }
 .governance-state p { margin: .35rem 0; font-size: .77rem; }
+.governance-message { max-width: 62rem; color: #d9cfe0; }
 .decision-reason { color: var(--danger); }
 .human-control { margin: .55rem 0; padding: .55rem .65rem; border-left: 3px solid var(--warning); background: #211a12; color: var(--warning); font-size: .76rem; }
 .action-controls, .phase-action { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: .75rem; }
@@ -316,7 +340,11 @@ textarea { width: 100%; min-height: 4.5rem; margin: .35rem 0 .55rem; padding: .6
   .incident-picker { max-height: calc(100vh - 1.5rem); padding: .9rem; }
   .incident-choices, .runtime-choices { grid-template-columns: 1fr; }
   .next-action { width: 100%; min-width: 0; padding: .65rem 0 0; border-top: 1px solid #443551; border-left: 0; }
-  .compact-details, .verification-overview, .closure-summary, .evidence-facts, .proposal-details { grid-template-columns: 1fr; }
+  .compact-details, .verification-overview, .closure-summary, .evidence-facts, .proposal-details, .proposal-overview, .proposal-context, .parameter-list { grid-template-columns: 1fr; }
+  .proposal-overview > div, .proposal-overview > div:first-child { padding: .6rem 0; border-top: 1px solid var(--line); border-left: 0; }
+  .proposal-overview > div:first-child { border-top: 0; }
+  .proposal-heading, .proposal-parameters-heading { align-items: flex-start; flex-direction: column; gap: .4rem; }
+  .proposal-heading > p, .proposal-parameters-heading small { max-width: none; text-align: left; }
   .runtime-run { width: 100%; }
   .next-action-control, .exceptional-path { align-items: stretch; flex-direction: column; }
   .history-item { align-items: flex-start; }
