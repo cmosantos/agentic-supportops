@@ -10,6 +10,17 @@ from services.tool_registry import InvestigationToolRegistry
 from tests.fakes import final_result
 
 
+def contains_schema_key(value, key: str) -> bool:
+    if isinstance(value, dict):
+        return any(
+            current_key == key or contains_schema_key(item, key)
+            for current_key, item in value.items()
+        )
+    if isinstance(value, list):
+        return any(contains_schema_key(item, key) for item in value)
+    return False
+
+
 class FakeSDKResponses:
     def __init__(self) -> None:
         self.requests: list[dict] = []
@@ -109,7 +120,7 @@ def test_gateway_constructs_sdk_with_retry_and_timeout_controls(monkeypatch) -> 
     assert captured["timeout"] == 60
 
 
-def test_installed_sdk_serializes_bounded_contract_without_external_traffic() -> None:
+def test_installed_sdk_serializes_responses_compatible_contract_without_external_traffic() -> None:
     captured_requests: list[dict] = []
 
     def response_payload(response_id: str, output: list[dict]) -> dict:
@@ -198,6 +209,12 @@ def test_installed_sdk_serializes_bounded_contract_without_external_traffic() ->
     assert all(item["max_output_tokens"] == 2000 for item in captured_requests)
     assert captured_requests[0]["text"]["format"]["strict"] is True
     assert captured_requests[0]["text"]["format"]["schema"]["additionalProperties"] is False
+    assert contains_schema_key(
+        captured_requests[0]["text"]["format"]["schema"], "anyOf"
+    )
+    assert not contains_schema_key(
+        captured_requests[0]["text"]["format"]["schema"], "oneOf"
+    )
     assert {tool["name"] for tool in captured_requests[0]["tools"]} == set(
         InvestigationToolRegistry().names
     )

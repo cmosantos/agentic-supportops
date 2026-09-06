@@ -16,6 +16,24 @@ from domain.ai import (
 PROMPT_PATH = Path(__file__).resolve().parents[2] / "prompts" / "ai-investigator.md"
 
 
+def _responses_compatible_schema(value: Any) -> Any:
+    """Use the Responses API's supported spelling for mutually exclusive branches.
+
+    Pydantic emits ``oneOf`` for the discriminated action union, while the
+    Responses structured-output schema accepts the equivalent ``anyOf`` form.
+    The action branches remain mutually exclusive because each has a distinct
+    ``action_type`` literal and closed object properties.
+    """
+    if isinstance(value, dict):
+        return {
+            ("anyOf" if key == "oneOf" else key): _responses_compatible_schema(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_responses_compatible_schema(item) for item in value]
+    return value
+
+
 class ResponsesProviderError(RuntimeError):
     def __init__(self, code: str, message: str) -> None:
         super().__init__(message)
@@ -47,7 +65,9 @@ class ResponsesGateway:
                 "type": "json_schema",
                 "name": "ai_investigation_result",
                 "strict": True,
-                "schema": AIInvestigationResult.model_json_schema(),
+                "schema": _responses_compatible_schema(
+                    AIInvestigationResult.model_json_schema()
+                ),
             }
         }
 
