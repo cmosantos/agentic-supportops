@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -281,18 +281,179 @@ function installFetch(options?: {
         : jsonResponse({ detail: { code: "action_execution_reconciliation_not_found", message: "Reconciliation not found" } }, 404);
     }
     if (options?.post) return options.post(url, init);
+    if (url.endsWith("/investigate")) {
+      return jsonResponse({ incident_id: 1, catalog_id: "INC-001", steps: [], evidence: [] });
+    }
     throw new Error(`Unexpected request: ${url}`);
   });
   vi.stubGlobal("fetch", fetchMock);
   return fetchMock;
 }
 
+const runtimeLabelsForTests = {
+  deterministic: "Deterministic",
+  ai: "AI",
+  agents_sdk: "Agents SDK",
+} as const;
+
 async function selectIncident(title = "Disk usage alert") {
-  await userEvent.click(await screen.findByRole("button", { name: new RegExp(title) }));
+  const trigger = screen.queryByRole("button", { name: "Change incident" }) ??
+    await screen.findByRole("button", { name: "Select incident" });
+  await userEvent.click(trigger);
+  const dialog = screen.getByRole("dialog", { name: "Select incident" });
+  await userEvent.click(await within(dialog).findByRole("radio", { name: new RegExp(title) }));
+}
+
+async function runInvestigation(runtime: "deterministic" | "ai" | "agents_sdk" = "ai") {
+  const dialog = screen.queryByRole("dialog", { name: "Select incident" });
+  if (dialog) {
+    await userEvent.click(within(dialog).getByRole("radio", { name: new RegExp(`^${runtimeLabelsForTests[runtime]}`) }));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Select and run" }));
+    return;
+  }
+  const selector = await screen.findByRole("combobox", { name: "Investigation runtime" });
+  await userEvent.selectOptions(selector, runtime);
+  await userEvent.click(await screen.findByRole("button", { name: "Run investigation" }));
 }
 
 afterEach(() => {
   vi.unstubAllGlobals();
+});
+
+const deterministicJourneys = [
+  {
+    catalog: "INC-023", target: "SUPPORT-API", title: "API health degraded",
+    observations: [
+      { tool: "get_application_health", resource: "SUPPORT-API", payload: { status: "degraded", error_rate_percent: 12.4 } },
+      { tool: "get_host_status", resource: "API-01", payload: { status: "degraded" } },
+      { tool: "get_metrics", resource: "API-01", payload: { cpu_percent: 79 } },
+      { tool: "get_recent_alerts", resource: "API-01", payload: { alerts: [{ id: "ALT-002", active: true }] } },
+    ],
+  },
+  {
+    catalog: "INC-024", target: "CONTOSO-DB", title: "Database connection pool exhausted",
+    observations: [
+      { tool: "get_application_health", resource: "CONTOSO-DB", payload: { status: "degraded", connection_pool_percent: 98 } },
+      { tool: "get_host_status", resource: "DB-01", payload: { status: "degraded" } },
+      { tool: "get_metrics", resource: "DB-01", payload: { memory_percent: 92 } },
+      { tool: "get_recent_alerts", resource: "DB-01", payload: { alerts: [{ id: "ALT-003", active: true }] } },
+    ],
+  },
+  {
+    catalog: "INC-026", target: "USR-FRANK", title: "User account locked",
+    observations: [
+      { tool: "get_user", resource: "USR-FRANK", payload: { id: "USR-FRANK", account: { enabled: true, locked: true } } },
+      { tool: "get_account_status", resource: "USR-FRANK", payload: { enabled: true, locked: true } },
+    ],
+  },
+];
+
+function deterministicResponse(journey: typeof deterministicJourneys[number]) {
+  return {
+    incident_id: 1,
+    catalog_id: journey.catalog,
+    evidence: journey.observations.map((item, index) => ({
+      ...deterministicEvidence, id: 100 + index, source: item.tool, resource: item.resource, payload: item.payload,
+    })),
+    steps: journey.observations.map((item, index) => ({
+      id: 100 + index, incident_id: 1, investigation_id: null, origin: "deterministic",
+      tool: item.tool, target_resource: item.resource, arguments: {}, status: "completed",
+      result: { tool: item.tool, resource: item.resource, success: true, data: item.payload, error: null },
+      created_at: "2026-08-28T12:10:00Z", completed_at: "2026-08-28T12:10:01Z",
+    })),
+  };
+}
+
+describe("Deterministic investigation after model history", () => {
+  it.each(deterministicJourneys.flatMap((journey) =>
+    (["ai", "agents_sdk"] as const).map((runtime) => ({ ...journey, runtime })),
+  ))("shows only the $catalog playbook activity after reviewing $runtime", async (journey) => {
+    const run = { ...actionableExecution.investigation, mode: journey.runtime };
+    const response = deterministicResponse(journey);
+    const fetchMock = installFetch({
+      aiConfigured: true,
+      incidentsOverride: [{ ...incidents[0], catalog_id: journey.catalog, title: journey.title, affected_resource_id: journey.target }],
+      get: async (url) => {
+        if (url.endsWith("/investigation")) return jsonResponse({ ...response, evidence: [], steps: [] });
+        if (url.endsWith("/investigation-runs")) return jsonResponse([run]);
+        if (url.endsWith("/artifacts")) return jsonResponse({ ...actionableExecution, investigation: run });
+        if (url.endsWith("/action-proposals")) return jsonResponse([pendingProposal]);
+        if (url.endsWith("/events")) return jsonResponse([{
+          id: 90, investigation_id: run.id, runtime: journey.runtime === "ai" ? "manual_responses" : "agents_sdk",
+          event_type: "tool_completed", sequence: 1, status: "completed",
+          timestamp: "2026-08-28T12:11:00Z", metadata: { tool_name: "previous_model_tool" },
+        }]);
+        return undefined;
+      },
+      post: async (url) => url.endsWith(`/incidents/${journey.catalog}/investigate`)
+        ? jsonResponse(response) : Promise.reject(new Error(`Unexpected request: ${url}`)),
+    });
+    render(<App />);
+    await selectIncident(journey.title);
+    await runInvestigation("deterministic");
+    const history = screen.getByRole("region", { name: "Investigation history" });
+    await userEvent.click(await within(history).findByText(/View previous runs/));
+    const previousRun = within(history).getByRole("button");
+    await userEvent.click(previousRun);
+    expect(await screen.findByText("Disk pressure confirmed.")).toBeVisible();
+    await userEvent.click(screen.getByText(/Technical details/));
+    await userEvent.click(screen.getByText(/View audit timeline/));
+    expect(screen.getByText("previous_model_tool · completed")).toBeVisible();
+
+    await runInvestigation("deterministic");
+
+    for (const [index, observation] of journey.observations.entries()) {
+      expect(await screen.findByText(`#${100 + index} · ${observation.tool}`)).toBeVisible();
+    }
+    expect(screen.getByText(`Technical details · ${journey.observations.length} activity steps · 0 audit events`)).toBeVisible();
+    expect(screen.queryByText("previous_model_tool · completed")).not.toBeInTheDocument();
+    expect(screen.queryByText("Disk pressure confirmed.")).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Proposed Action" })).not.toBeInTheDocument();
+    expect(screen.queryByText("Loading investigation artifacts…")).not.toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Investigation runtime" })).toHaveValue("deterministic");
+    expect(screen.getByRole("button", { name: "Run investigation" })).toBeEnabled();
+    expect(previousRun).toHaveAttribute("aria-pressed", "false");
+    expect(within(history).getAllByRole("button")).toHaveLength(1);
+    expect(screen.getByRole("region", { name: "Current operational state" })).toHaveTextContent("Evidence collected");
+    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === "POST").map(([url]) => String(url)))
+      .toEqual([
+        `http://localhost:8000/incidents/${journey.catalog}/investigate`,
+        `http://localhost:8000/incidents/${journey.catalog}/investigate`,
+      ]);
+  });
+
+  it("finishes INC-023 deterministic review when a pending historical request is cancelled", async () => {
+    const journey = deterministicJourneys[0];
+    const response = deterministicResponse(journey);
+    let resolveArtifacts!: (response: Response) => void;
+    let historicalSignal: AbortSignal | null | undefined;
+    const pendingArtifacts = new Promise<Response>((resolve) => { resolveArtifacts = resolve; });
+    installFetch({
+      aiConfigured: true,
+      incidentsOverride: [{ ...incidents[0], catalog_id: journey.catalog, title: journey.title }],
+      get: async (url, init) => {
+        if (url.endsWith("/investigation")) return jsonResponse({ ...response, steps: [], evidence: [] });
+        if (url.endsWith("/investigation-runs")) return jsonResponse([actionableExecution.investigation]);
+        if (url.endsWith("/artifacts")) { historicalSignal = init?.signal; return pendingArtifacts; }
+        return undefined;
+      },
+      post: async () => jsonResponse(response),
+    });
+    render(<App />);
+    await selectIncident(journey.title);
+    await runInvestigation("deterministic");
+    const history = screen.getByRole("region", { name: "Investigation history" });
+    await userEvent.click(await within(history).findByText(/View previous runs/));
+    await userEvent.click(within(history).getByRole("button"));
+    expect(await screen.findByText("Loading investigation artifacts…")).toBeVisible();
+    await runInvestigation("deterministic");
+    expect(await screen.findByText("#100 · get_application_health")).toBeVisible();
+    expect(historicalSignal?.aborted).toBe(true);
+    expect(screen.queryByText("Loading investigation artifacts…")).not.toBeInTheDocument();
+    await act(async () => { resolveArtifacts(jsonResponse(actionableExecution)); });
+    expect(screen.getByText("#100 · get_application_health")).toBeVisible();
+    expect(screen.queryByText("Disk pressure confirmed.")).not.toBeInTheDocument();
+  });
 });
 
 describe("Operator console golden journeys", () => {
@@ -325,7 +486,7 @@ describe("Operator console golden journeys", () => {
     });
     render(<App />);
     await selectIncident(journey.title);
-    await userEvent.click(await screen.findByRole("button", { name: "Run AI investigation" }));
+    await runInvestigation("ai");
     await screen.findByRole("button", { name: "Approve" });
     for (const [index, source] of journey.sources.entries()) {
       expect(screen.getByText(`#${10 + index} · ${source}`)).toBeVisible();
@@ -358,7 +519,9 @@ describe("Agentic SupportOps operator workflow", () => {
     render(<App />);
 
     expect(screen.getByText("Checking backend health…")).toBeInTheDocument();
-    expect(await screen.findByRole("button", { name: /INC-001.*Disk usage alert/ })).toBeVisible();
+    expect(screen.queryByRole("complementary", { name: "Incident queue" })).not.toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Select incident" })).toBeVisible();
+    expect(screen.queryByText("Disk usage alert")).not.toBeInTheDocument();
     expect(screen.getByText("Backend online — agentic-supportops")).toBeVisible();
   });
 
@@ -370,22 +533,73 @@ describe("Agentic SupportOps operator workflow", () => {
     expect(screen.queryByRole("button", { name: /INC-001/ })).not.toBeInTheDocument();
   });
 
+  it("opens an accessible incident picker and closes it with Escape", async () => {
+    installFetch();
+    render(<App />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Select incident" }));
+    const dialog = screen.getByRole("dialog", { name: "Select incident" });
+    expect(dialog).toHaveAttribute("aria-modal", "true");
+    expect(within(dialog).getByRole("radio", { name: /INC-001.*Disk usage alert/ })).toBeVisible();
+    expect(within(dialog).getByRole("button", { name: "Select and run" })).toBeDisabled();
+
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog", { name: "Select incident" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Select incident" })).toHaveFocus();
+  });
+
+  it("keeps AI and Agents SDK unavailable when AI is not configured", async () => {
+    installFetch();
+    render(<App />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Select incident" }));
+    const dialog = screen.getByRole("dialog", { name: "Select incident" });
+    expect(within(dialog).getByRole("radio", { name: /^AI/ })).toBeDisabled();
+    expect(within(dialog).getByRole("radio", { name: /^Agents SDK/ })).toBeDisabled();
+    expect(within(dialog).getByRole("radio", { name: /^Deterministic/ })).toBeEnabled();
+  });
+
+  it("reopens the picker from the active incident without starting on incident click", async () => {
+    const fetchMock = installFetch();
+    render(<App />);
+    await selectIncident();
+    await runInvestigation("deterministic");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Change incident" }));
+    const dialog = screen.getByRole("dialog", { name: "Select incident" });
+    expect(within(dialog).getByRole("radio", { name: /INC-001.*Disk usage alert/ })).toBeChecked();
+    expect(within(dialog).getByRole("button", { name: "Select and run" })).toBeDisabled();
+    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(1);
+
+    await userEvent.click(within(dialog).getByRole("radio", { name: /INC-002.*DNS resolution failure/ }));
+    expect(screen.getByRole("heading", { name: "Disk usage alert" })).toBeVisible();
+    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(1);
+  });
+
   it("selects incidents and clears investigation output from the previous selection", async () => {
-    installFetch({
-      post: async () =>
-        jsonResponse({ incident_id: 1, catalog_id: "INC-001", steps: [], evidence: [deterministicEvidence] }),
+    const fetchMock = installFetch({
+      post: async (url) => jsonResponse({
+        incident_id: url.includes("INC-001") ? 1 : 2,
+        catalog_id: url.includes("INC-001") ? "INC-001" : "INC-002",
+        steps: [],
+        evidence: url.includes("INC-001") ? [deterministicEvidence] : [],
+      }),
     });
     render(<App />);
 
     await selectIncident();
-    await userEvent.click(screen.getByRole("button", { name: "Run deterministic" }));
+    await runInvestigation("deterministic");
     await userEvent.click(await screen.findByText("Observed payload"));
     expect(await screen.findByText(/"used_percent": 94/)).toBeVisible();
+    expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith("/incidents/INC-001/investigate"))).toBe(true);
+    expect(screen.getByRole("combobox", { name: "Investigation runtime" })).toHaveValue("deterministic");
 
-    await userEvent.click(screen.getByRole("button", { name: /DNS resolution failure/ }));
+    await selectIncident("DNS resolution failure");
+    await runInvestigation("deterministic");
     expect(screen.getByRole("heading", { name: "DNS resolution failure" })).toBeVisible();
     expect(screen.queryByText(/"used_percent": 94/)).not.toBeInTheDocument();
-    expect(screen.queryByText("Mode: deterministic")).not.toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Current operational state" })).toHaveTextContent("Awaiting investigation");
+    expect(screen.getByText("Mode: deterministic")).toBeVisible();
   });
 
   it("disables controls while a deterministic investigation runs and renders its evidence", async () => {
@@ -397,9 +611,9 @@ describe("Agentic SupportOps operator workflow", () => {
     render(<App />);
 
     await selectIncident();
-    await userEvent.click(screen.getByRole("button", { name: "Run deterministic" }));
-    expect(screen.getByRole("button", { name: "Running deterministic…" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "AI unavailable" })).toBeDisabled();
+    await runInvestigation("deterministic");
+    expect(screen.getByRole("button", { name: "Running investigation…" })).toBeDisabled();
+    expect(screen.getByRole("combobox", { name: "Investigation runtime" })).toBeDisabled();
     expect(screen.getByRole("status")).toHaveTextContent("Investigation in progress");
 
     resolveInvestigation(
@@ -408,7 +622,7 @@ describe("Agentic SupportOps operator workflow", () => {
     await userEvent.click(await screen.findByText("Observed payload"));
     expect(await screen.findByText(/"used_percent": 94/)).toBeVisible();
     expect(screen.getByText("Mode: deterministic")).toBeVisible();
-    expect(screen.getByRole("button", { name: "Run deterministic" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Run investigation" })).toBeEnabled();
   });
 
   it("surfaces a structured investigation conflict without leaking protocol details", async () => {
@@ -418,15 +632,15 @@ describe("Agentic SupportOps operator workflow", () => {
     render(<App />);
 
     await selectIncident();
-    await userEvent.click(screen.getByRole("button", { name: "Run deterministic" }));
+    await runInvestigation("deterministic");
 
     expect(await screen.findByText("Investigation already running")).toBeVisible();
     expect(screen.getByText("Mode: deterministic")).toBeVisible();
-    expect(screen.getByRole("button", { name: "Run deterministic" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Run investigation" })).toBeEnabled();
   });
 
   it("distinguishes a configured AI investigation and renders its validated result", async () => {
-    installFetch({
+    const fetchMock = installFetch({
       aiConfigured: true,
       post: async () =>
         jsonResponse({
@@ -472,8 +686,8 @@ describe("Agentic SupportOps operator workflow", () => {
     render(<App />);
 
     await selectIncident();
-    const aiButton = await screen.findByRole("button", { name: "Run AI investigation" });
-    await userEvent.click(aiButton);
+    await runInvestigation("ai");
+    await userEvent.click(screen.getByText(/Technical details/));
 
     expect(await screen.findByText("Disk pressure confirmed.")).toBeVisible();
     expect(screen.getByText("Assessment:").closest("p")).toHaveTextContent(
@@ -488,6 +702,8 @@ describe("Agentic SupportOps operator workflow", () => {
     expect(screen.getByRole("heading", { name: "Evidence" })).toBeVisible();
     expect(screen.getByText("Log growth rate is not available.")).toBeVisible();
     expect(screen.getByText(/Human action required/)).toBeVisible();
+    expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith("/incidents/INC-001/investigate-ai"))).toBe(true);
+    expect(screen.getByRole("combobox", { name: "Investigation runtime" })).toHaveValue("ai");
   });
 
   it("does not let an older investigation response overwrite a newly selected incident", async () => {
@@ -495,12 +711,17 @@ describe("Agentic SupportOps operator workflow", () => {
     const oldRequest = new Promise<Response>((resolve) => {
       resolveOldRequest = resolve;
     });
-    installFetch({ post: async () => oldRequest });
+    installFetch({
+      post: async (url) => url.includes("INC-001")
+        ? oldRequest
+        : jsonResponse({ incident_id: 2, catalog_id: "INC-002", steps: [], evidence: [] }),
+    });
     render(<App />);
 
     await selectIncident();
-    await userEvent.click(screen.getByRole("button", { name: "Run deterministic" }));
-    await userEvent.click(screen.getByRole("button", { name: /DNS resolution failure/ }));
+    await runInvestigation("deterministic");
+    await selectIncident("DNS resolution failure");
+    await runInvestigation("deterministic");
     resolveOldRequest(
       jsonResponse({ incident_id: 1, catalog_id: "INC-001", steps: [], evidence: [deterministicEvidence] }),
     );
@@ -508,7 +729,7 @@ describe("Agentic SupportOps operator workflow", () => {
     await waitFor(() => {
       expect(screen.getByRole("heading", { name: "DNS resolution failure" })).toBeVisible();
       expect(screen.queryByText(/"used_percent": 94/)).not.toBeInTheDocument();
-      expect(screen.queryByText("Mode: deterministic")).not.toBeInTheDocument();
+      expect(screen.getByText("Mode: deterministic")).toBeVisible();
     });
   });
 
@@ -532,12 +753,38 @@ describe("Agentic SupportOps operator workflow", () => {
     render(<App />);
 
     await selectIncident();
-    await userEvent.click(screen.getByRole("button", { name: "Run Agents SDK" }));
+    await runInvestigation("agents_sdk");
 
     expect(await screen.findByText("Mode: agents_sdk")).toBeVisible();
     expect(fetchMock.mock.calls.some(([url]) =>
       String(url).endsWith("/investigate-agent-sdk")
     )).toBe(true);
+    expect(screen.getByRole("combobox", { name: "Investigation runtime" })).toHaveValue("agents_sdk");
+  });
+
+  it("starts the selected incident and runtime only from the explicit picker action", async () => {
+    const fetchMock = installFetch({
+      aiConfigured: true,
+      post: async (url) => url.endsWith("/investigate-agent-sdk")
+        ? jsonResponse({ ...actionableExecution, investigation: { ...actionableExecution.investigation, mode: "agents_sdk", result: { ...actionableExecution.investigation.result, proposed_action: null } } })
+        : Promise.reject(new Error(`Unexpected request: ${url}`)),
+    });
+    render(<App />);
+
+    await selectIncident();
+    const dialog = screen.getByRole("dialog", { name: "Select incident" });
+    const run = within(dialog).getByRole("button", { name: "Select and run" });
+    expect(run).toBeDisabled();
+    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(0);
+
+    const agentsRuntime = within(dialog).getByRole("radio", { name: /^Agents SDK/ });
+    await userEvent.click(agentsRuntime);
+    expect(agentsRuntime).toBeChecked();
+    expect(run).toBeEnabled();
+    await userEvent.click(run);
+
+    expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith("/investigate-agent-sdk"))).toBe(true);
+    expect(screen.queryByRole("dialog", { name: "Select incident" })).not.toBeInTheDocument();
   });
 
   it("loads persisted investigation history as readable artifacts and timeline", async () => {
@@ -567,7 +814,10 @@ describe("Agentic SupportOps operator workflow", () => {
     render(<App />);
 
     await selectIncident();
+    await runInvestigation("deterministic");
+    await userEvent.click(screen.getByText(/View previous runs/));
     await userEvent.click(await screen.findByRole("button", { name: /Responses API/ }));
+    await userEvent.click(screen.getByText(/Technical details/));
 
     expect(await screen.findByRole("heading", { name: "Operational timeline" })).toBeVisible();
     expect(screen.getByText("run completed")).toBeVisible();
@@ -592,7 +842,9 @@ describe("Agentic SupportOps operator workflow", () => {
     render(<App />);
 
     await selectIncident();
+    await runInvestigation("deterministic");
     const history = screen.getByRole("region", { name: "Investigation history" });
+    await userEvent.click(within(history).getByText(/View previous runs/));
     const runButtons = within(history).getAllByRole("button");
     await userEvent.click(runButtons[0]);
     expect(await screen.findByText("#10 · get_disk_usage")).toBeVisible();
@@ -600,20 +852,22 @@ describe("Agentic SupportOps operator workflow", () => {
     expect(await screen.findByText("#11 · get_disk_usage")).toBeVisible();
     expect(screen.queryByText("#10 · get_disk_usage")).not.toBeInTheDocument();
     expect(screen.getAllByText("Agents SDK").length).toBeGreaterThan(0);
+    await userEvent.click(screen.getByText(/Technical details/));
     expect(screen.getByText("No action proposal was recorded for this investigation.")).toBeVisible();
   });
 
   it("represents deterministic history without inventing a model assessment", async () => {
     installFetch({
-      get: async (url) => url.endsWith("/investigation")
+      post: async (url) => url.endsWith("/investigate")
         ? jsonResponse({ incident_id: 1, catalog_id: "INC-001", steps: [{ id: 1, incident_id: 1, investigation_id: null, tool: "get_disk_usage", target_resource: "app-01", status: "completed", evidence_ids: [10], started_at: "2026-08-28T12:10:00Z", completed_at: "2026-08-28T12:10:01Z", error: null }], evidence: [deterministicEvidence] })
-        : undefined,
+        : Promise.reject(new Error(`Unexpected request: ${url}`)),
     });
     render(<App />);
 
     await selectIncident();
+    await runInvestigation("deterministic");
     expect(await screen.findByText("Persisted deterministic result")).toBeVisible();
-    expect(screen.getByText("Deterministic")).toBeVisible();
+    expect(screen.getByRole("option", { name: "Deterministic" })).toBeVisible();
     expect(screen.getByText("#10 · get_disk_usage")).toBeVisible();
     expect(screen.getByText("No model assessment is persisted for this investigation.")).toBeVisible();
   });
@@ -631,6 +885,7 @@ describe("Agentic SupportOps operator workflow", () => {
     render(<App />);
 
     await selectIncident();
+    await runInvestigation("deterministic");
     await userEvent.click(await screen.findByRole("button", { name: /Responses API/ }));
     expect(await screen.findByText("Historical investigation details could not be loaded")).toBeVisible();
     expect(screen.queryByText("#10 · get_disk_usage")).not.toBeInTheDocument();
@@ -659,10 +914,10 @@ describe("Agentic SupportOps operator workflow", () => {
     render(<App />);
 
     await selectIncident();
-    await userEvent.click(await screen.findByRole("button", { name: "Run AI investigation" }));
+    await runInvestigation("ai");
 
     expect(await screen.findByRole("heading", { name: "Proposed Action" })).toBeVisible();
-    expect(screen.getByText("Action type:").closest("p")).toHaveTextContent("Reset simulated application state");
+    expect(screen.getByText("Action type:").closest("div")).toHaveTextContent("Reset simulated application state");
     expect(screen.getByText("Supporting evidence:").closest("p")).toHaveTextContent("#10");
     expect(screen.getByText("Approval state:").closest("p")).toHaveTextContent("pending");
     expect(screen.queryByRole("button", { name: /execute/i })).not.toBeInTheDocument();
@@ -689,7 +944,7 @@ describe("Agentic SupportOps operator workflow", () => {
     render(<App />);
 
     await selectIncident();
-    await userEvent.click(await screen.findByRole("button", { name: "Run AI investigation" }));
+    await runInvestigation("ai");
 
     expect(await screen.findByRole("heading", { name: "Proposed Action" })).toBeVisible();
     expect(screen.getByText("Bounded parameters").parentElement).toHaveTextContent('"service_name": "SupportApi"');
@@ -711,7 +966,7 @@ describe("Agentic SupportOps operator workflow", () => {
     render(<App />);
 
     await selectIncident();
-    await userEvent.click(await screen.findByRole("button", { name: "Run AI investigation" }));
+    await runInvestigation("ai");
     await userEvent.click(await screen.findByRole("button", { name: "Approve" }));
 
     expect(await screen.findByText("Proposal already decided")).toBeVisible();
@@ -736,7 +991,7 @@ describe("Agentic SupportOps operator workflow", () => {
     render(<App />);
 
     await selectIncident();
-    await userEvent.click(await screen.findByRole("button", { name: "Run AI investigation" }));
+    await runInvestigation("ai");
     const approve = await screen.findByRole("button", { name: "Approve" });
     approve.click();
     approve.click();
@@ -766,7 +1021,7 @@ describe("Agentic SupportOps operator workflow", () => {
     });
     render(<App />);
     await selectIncident();
-    await userEvent.click(await screen.findByRole("button", { name: "Run AI investigation" }));
+    await runInvestigation("ai");
 
     expect(screen.queryByRole("button", { name: /execute approved/i })).not.toBeInTheDocument();
     await userEvent.click(await screen.findByRole("button", { name: "Approve" }));
@@ -775,7 +1030,8 @@ describe("Agentic SupportOps operator workflow", () => {
     expect(screen.queryByRole("button", { name: "Verify outcome" })).not.toBeInTheDocument();
 
     resolveExecution(jsonResponse(completedExecution));
-    expect((await screen.findByText("Execution status:")).closest("p")).toHaveTextContent("COMPLETED");
+    expect((await screen.findByText("Execution status:")).closest("div")).toHaveTextContent("COMPLETED");
+    await userEvent.click(screen.getByText("Operational details"));
     await userEvent.click(screen.getByText("Technical result"));
     expect(screen.getByText(/"current_state": "healthy"/)).toBeVisible();
     expect(screen.queryByRole("button", { name: /execute/i })).not.toBeInTheDocument();
@@ -797,10 +1053,10 @@ describe("Agentic SupportOps operator workflow", () => {
     });
     render(<App />);
     await selectIncident();
-    await userEvent.click(await screen.findByRole("button", { name: "Run AI investigation" }));
+    await runInvestigation("ai");
     await userEvent.click(await screen.findByRole("button", { name: "Approve" }));
 
-    expect(await screen.findByText("Approved, awaiting explicit operator execution.")).toBeVisible();
+    expect(await screen.findByText(/Approved, awaiting explicit operator execution/)).toBeVisible();
     expect(screen.getByRole("button", { name: "Execute approved action" })).toBeVisible();
     expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith("/execute"))).toHaveLength(0);
   });
@@ -820,7 +1076,7 @@ describe("Agentic SupportOps operator workflow", () => {
     });
     render(<App />);
     await selectIncident();
-    await userEvent.click(await screen.findByRole("button", { name: "Run AI investigation" }));
+    await runInvestigation("ai");
     await userEvent.click(await screen.findByRole("button", { name: "Approve" }));
     const execute = await screen.findByRole("button", { name: "Execute approved action" });
     execute.click();
@@ -851,11 +1107,11 @@ describe("Agentic SupportOps operator workflow", () => {
     });
     render(<App />);
     await selectIncident();
-    await userEvent.click(await screen.findByRole("button", { name: "Run AI investigation" }));
+    await runInvestigation("ai");
     await userEvent.click(await screen.findByRole("button", { name: "Approve" }));
     await userEvent.click(await screen.findByRole("button", { name: "Execute approved action" }));
 
-    expect((await screen.findByText("Execution status:")).closest("p")).toHaveTextContent("OUTCOME UNKNOWN");
+    expect((await screen.findByText("Execution status:")).closest("div")).toHaveTextContent("OUTCOME UNKNOWN");
     expect(screen.getByText(/will not be retried automatically/i)).toBeVisible();
     expect(screen.queryByRole("button", { name: /retry|execute approved|verify outcome/i })).not.toBeInTheDocument();
   });
@@ -878,11 +1134,11 @@ describe("Agentic SupportOps operator workflow", () => {
     });
     render(<App />);
     await selectIncident();
-    await userEvent.click(await screen.findByRole("button", { name: "Run AI investigation" }));
+    await runInvestigation("ai");
     await userEvent.click(await screen.findByRole("button", { name: "Approve" }));
     await userEvent.click(await screen.findByRole("button", { name: "Execute approved action" }));
 
-    expect((await screen.findByText("Execution status:")).closest("p")).toHaveTextContent("RUNNING");
+    expect((await screen.findByText("Execution status:")).closest("div")).toHaveTextContent("RUNNING");
     expect(screen.getByText(/execution is in progress/i)).toBeVisible();
     expect(screen.queryByRole("button", { name: /execute approved/i })).not.toBeInTheDocument();
     expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith("/execute"))).toHaveLength(1);
@@ -903,7 +1159,7 @@ describe("Agentic SupportOps operator workflow", () => {
     });
     render(<App />);
     await selectIncident();
-    await userEvent.click(await screen.findByRole("button", { name: "Run AI investigation" }));
+    await runInvestigation("ai");
 
     expect(await screen.findByRole("button", { name: "Execute approved action" })).toBeVisible();
     expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith("/execution"))).toHaveLength(1);
@@ -922,10 +1178,11 @@ describe("Agentic SupportOps operator workflow", () => {
     });
     render(<App />);
     await selectIncident();
-    await userEvent.click(await screen.findByRole("button", { name: "Run AI investigation" }));
+    await runInvestigation("ai");
 
-    expect((await screen.findByText("Execution status:")).closest("p")).toHaveTextContent("COMPLETED");
-    expect(screen.getByText("Current state").nextElementSibling).toHaveTextContent("healthy");
+    expect((await screen.findByText("Execution status:")).closest("div")).toHaveTextContent("COMPLETED");
+    const observedState = screen.getAllByText("Current state").find((element) => element.tagName === "DT");
+    expect(observedState?.nextElementSibling).toHaveTextContent("healthy");
     expect(screen.queryByRole("button", { name: "Execute approved action" })).not.toBeInTheDocument();
     expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith("/execute"))).toHaveLength(0);
   });
@@ -941,8 +1198,9 @@ describe("Agentic SupportOps operator workflow", () => {
     });
     render(<App />);
     await selectIncident();
-    await userEvent.click(await screen.findByRole("button", { name: "Run AI investigation" }));
+    await runInvestigation("ai");
 
+    await userEvent.click(screen.getByText("Operational details"));
     const timeline = await screen.findByRole("region", { name: "Execution Timeline" });
     const items = within(timeline).getAllByRole("listitem");
     expect(items).toHaveLength(2);
@@ -969,14 +1227,16 @@ describe("Agentic SupportOps operator workflow", () => {
     installFetch(fetchOptions);
     const first = render(<App />);
     await selectIncident();
-    await userEvent.click(await screen.findByRole("button", { name: "Run AI investigation" }));
+    await runInvestigation("ai");
+    await userEvent.click(screen.getByText("Operational details"));
     expect(await screen.findByText(/No persisted lifecycle events/)).toBeVisible();
     first.unmount();
 
     installFetch(fetchOptions);
     render(<App />);
     await selectIncident();
-    await userEvent.click(await screen.findByRole("button", { name: "Run AI investigation" }));
+    await runInvestigation("ai");
+    await userEvent.click(screen.getByText("Operational details"));
     expect(await screen.findByText("Unable to load execution timeline.")).toBeVisible();
   });
 
@@ -997,9 +1257,9 @@ describe("Agentic SupportOps operator workflow", () => {
     });
     render(<App />);
     await selectIncident();
-    await userEvent.click(await screen.findByRole("button", { name: "Run AI investigation" }));
+    await runInvestigation("ai");
 
-    expect((await screen.findByText("Execution status:")).closest("p")).toHaveTextContent("FAILED");
+    expect((await screen.findByText("Execution status:")).closest("div")).toHaveTextContent("FAILED");
     expect(screen.getByText("Application not found")).toBeVisible();
     expect(screen.queryByRole("button", { name: "Execute approved action" })).not.toBeInTheDocument();
   });
@@ -1022,9 +1282,9 @@ describe("Agentic SupportOps operator workflow", () => {
     });
     render(<App />);
     await selectIncident();
-    await userEvent.click(await screen.findByRole("button", { name: "Run AI investigation" }));
+    await runInvestigation("ai");
 
-    expect((await screen.findByText("Execution status:")).closest("p")).toHaveTextContent("OUTCOME UNKNOWN");
+    expect((await screen.findByText("Execution status:")).closest("div")).toHaveTextContent("OUTCOME UNKNOWN");
     expect(screen.getByText(/will not be retried automatically/i)).toBeVisible();
     expect(screen.queryByRole("button", { name: /retry|execute approved/i })).not.toBeInTheDocument();
   });
@@ -1044,7 +1304,7 @@ describe("Agentic SupportOps operator workflow", () => {
     });
     render(<App />);
     await selectIncident();
-    await userEvent.click(await screen.findByRole("button", { name: "Run AI investigation" }));
+    await runInvestigation("ai");
 
     expect(await screen.findByText("Execution state is temporarily unavailable")).toBeVisible();
     expect(screen.getByText(/controls are unavailable until persisted state can be confirmed/i)).toBeVisible();
@@ -1064,7 +1324,7 @@ describe("Agentic SupportOps operator workflow", () => {
     });
     render(<App />);
     await selectIncident();
-    await userEvent.click(await screen.findByRole("button", { name: "Run AI investigation" }));
+    await runInvestigation("ai");
 
     expect(await screen.findByRole("button", { name: "Reconcile state" })).toBeVisible();
     expect(screen.getByText(/read-only observation/i)).toBeVisible();
@@ -1085,7 +1345,7 @@ describe("Agentic SupportOps operator workflow", () => {
     });
     render(<App />);
     await selectIncident();
-    await userEvent.click(await screen.findByRole("button", { name: "Run AI investigation" }));
+    await runInvestigation("ai");
     await screen.findByText("Execution status:");
 
     expect(screen.queryByRole("button", { name: "Reconcile state" })).not.toBeInTheDocument();
@@ -1111,9 +1371,10 @@ describe("Agentic SupportOps operator workflow", () => {
     });
     render(<App />);
     await selectIncident();
-    await userEvent.click(await screen.findByRole("button", { name: "Run AI investigation" }));
+    await runInvestigation("ai");
 
     expect(await screen.findByText("Canonical attempt unavailable")).toBeVisible();
+    await userEvent.click(screen.getByText("Operational details"));
     expect(await screen.findByRole("region", { name: "Execution Timeline" })).toHaveTextContent("Attempt #51");
     expect(screen.queryByRole("button", { name: /reconcile|retry|execute approved|verify outcome/i })).not.toBeInTheDocument();
     expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/attempts/"))).toBe(false);
@@ -1129,14 +1390,18 @@ describe("Agentic SupportOps operator workflow", () => {
       attempt: async () => pendingAttempt,
       post: async (url) => {
         if (url.endsWith("/investigate-ai")) return jsonResponse(actionableExecution);
+        if (url.endsWith("/investigate")) {
+          return jsonResponse({ incident_id: 2, catalog_id: "INC-002", steps: [], evidence: [] });
+        }
         throw new Error(`Unexpected request: ${url}`);
       },
     });
     render(<App />);
     await selectIncident();
-    await userEvent.click(await screen.findByRole("button", { name: "Run AI investigation" }));
+    await runInvestigation("ai");
     await screen.findByText("Checking reconciliation state…");
-    await userEvent.click(screen.getByRole("button", { name: /INC-002/ }));
+    await selectIncident("DNS resolution failure");
+    await runInvestigation("deterministic");
     finishAttempt(jsonResponse(canonicalUnknownAttempt));
     await waitFor(() => expect(screen.queryByText("Execution status:")).not.toBeInTheDocument());
     expect(screen.queryByRole("button", { name: "Reconcile state" })).not.toBeInTheDocument();
@@ -1158,7 +1423,7 @@ describe("Agentic SupportOps operator workflow", () => {
     });
     render(<App />);
     await selectIncident();
-    await userEvent.click(await screen.findByRole("button", { name: "Run AI investigation" }));
+    await runInvestigation("ai");
     const reconcile = await screen.findByRole("button", { name: "Reconcile state" });
     reconcile.click();
     reconcile.click();
@@ -1166,7 +1431,7 @@ describe("Agentic SupportOps operator workflow", () => {
     expect(await screen.findByRole("button", { name: "Reconciling state…" })).toBeDisabled();
     expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith("/reconcile"))).toHaveLength(1);
     resolveReconciliation(jsonResponse(reconciliationResult));
-    expect((await screen.findByText("Reconciliation status:")).closest("p")).toHaveTextContent("DESIRED STATE OBSERVED");
+    expect((await screen.findByText("Reconciliation status:")).closest("div")).toHaveTextContent("DESIRED STATE OBSERVED");
     await waitFor(() => {
       expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith("/timeline"))).toHaveLength(2);
     });
@@ -1201,9 +1466,9 @@ describe("Agentic SupportOps operator workflow", () => {
     });
     render(<App />);
     await selectIncident();
-    await userEvent.click(await screen.findByRole("button", { name: "Run AI investigation" }));
+    await runInvestigation("ai");
 
-    expect((await screen.findByText("Reconciliation status:")).closest("p")).toHaveTextContent(status.replaceAll("_", " ").toUpperCase());
+    expect((await screen.findByText("Reconciliation status:")).closest("div")).toHaveTextContent(status.replaceAll("_", " ").toUpperCase());
     expect(screen.getByText(explanation)).toBeVisible();
     expect(screen.queryByRole("button", { name: "Reconcile state" })).not.toBeInTheDocument();
     expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith("/reconcile"))).toHaveLength(0);
@@ -1230,7 +1495,7 @@ describe("Agentic SupportOps operator workflow", () => {
     });
     render(<App />);
     await selectIncident();
-    await userEvent.click(await screen.findByRole("button", { name: "Run AI investigation" }));
+    await runInvestigation("ai");
 
     expect(await screen.findByText(/reconciliation appears stale/i)).toBeVisible();
     expect(screen.getByText(/explicit recovery is available as a separate operation/i)).toBeVisible();
@@ -1253,11 +1518,11 @@ describe("Agentic SupportOps operator workflow", () => {
     });
     render(<App />);
     await selectIncident();
-    await userEvent.click(await screen.findByRole("button", { name: "Run AI investigation" }));
+    await runInvestigation("ai");
     await userEvent.click(await screen.findByRole("button", { name: "Reconcile state" }));
 
     expect(await screen.findByText("Reconciliation unavailable")).toBeVisible();
-    expect(screen.getByText("Execution status:").closest("p")).toHaveTextContent("OUTCOME UNKNOWN");
+    expect(screen.getByText("Execution status:").closest("div")).toHaveTextContent("OUTCOME UNKNOWN");
     expect(screen.queryByRole("button", { name: /retry|execute approved/i })).not.toBeInTheDocument();
   });
 
@@ -1275,11 +1540,11 @@ describe("Agentic SupportOps operator workflow", () => {
     });
     render(<App />);
     await selectIncident();
-    await userEvent.click(await screen.findByRole("button", { name: "Run AI investigation" }));
+    await runInvestigation("ai");
     await userEvent.click(await screen.findByRole("button", { name: "Reconcile state" }));
 
-    expect((await screen.findByText("Execution status:")).closest("p")).toHaveTextContent("COMPLETED");
-    expect(screen.getByText("Reconciliation status:").closest("p")).toHaveTextContent("DESIRED STATE OBSERVED");
+    expect((await screen.findByText("Execution status:")).closest("div")).toHaveTextContent("COMPLETED");
+    expect(screen.getByText("Reconciliation status:").closest("div")).toHaveTextContent("DESIRED STATE OBSERVED");
     expect(executionReads).toBe(2);
     expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith("/execute"))).toHaveLength(0);
   });
@@ -1299,7 +1564,7 @@ describe("Agentic SupportOps operator workflow", () => {
     });
     render(<App />);
     await selectIncident();
-    await userEvent.click(await screen.findByRole("button", { name: "Run AI investigation" }));
+    await runInvestigation("ai");
     await userEvent.click(await screen.findByRole("button", { name: "Approve" }));
     await userEvent.click(await screen.findByRole("button", { name: "Execute approved action" }));
 
@@ -1330,11 +1595,11 @@ describe("Agentic SupportOps operator workflow", () => {
     });
     render(<App />);
     await selectIncident();
-    await userEvent.click(await screen.findByRole("button", { name: "Run AI investigation" }));
+    await runInvestigation("ai");
     await userEvent.click(await screen.findByRole("button", { name: "Approve" }));
     await userEvent.click(await screen.findByRole("button", { name: "Execute approved action" }));
 
-    expect((await screen.findByText("Execution status:")).closest("p")).toHaveTextContent("FAILED");
+    expect((await screen.findByText("Execution status:")).closest("div")).toHaveTextContent("FAILED");
     expect(screen.getByText("Application not found")).toBeVisible();
     expect(screen.queryByRole("button", { name: /execute approved/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Verify outcome" })).not.toBeInTheDocument();
@@ -1391,7 +1656,7 @@ describe("Agentic SupportOps operator workflow", () => {
     });
     render(<App />);
     await selectIncident();
-    await userEvent.click(await screen.findByRole("button", { name: "Run AI investigation" }));
+    await runInvestigation("ai");
     await userEvent.click(await screen.findByRole("button", { name: "Approve" }));
     await userEvent.click(await screen.findByRole("button", { name: "Execute approved action" }));
 
@@ -1429,7 +1694,7 @@ describe("Agentic SupportOps operator workflow", () => {
     });
     render(<App />);
     await selectIncident();
-    await userEvent.click(await screen.findByRole("button", { name: "Run AI investigation" }));
+    await runInvestigation("ai");
     await userEvent.click(await screen.findByRole("button", { name: "Approve" }));
     await userEvent.click(await screen.findByRole("button", { name: "Execute approved action" }));
     await userEvent.click(await screen.findByRole("button", { name: "Verify outcome" }));
@@ -1474,7 +1739,7 @@ describe("Agentic SupportOps operator workflow", () => {
     });
     render(<App />);
     await selectIncident();
-    await userEvent.click(await screen.findByRole("button", { name: "Run AI investigation" }));
+    await runInvestigation("ai");
     await userEvent.click(await screen.findByRole("button", { name: "Approve" }));
     await userEvent.click(await screen.findByRole("button", { name: "Execute approved action" }));
 
@@ -1498,7 +1763,7 @@ describe("Agentic SupportOps operator workflow", () => {
     });
     render(<App />);
     await selectIncident();
-    await userEvent.click(await screen.findByRole("button", { name: "Run AI investigation" }));
+    await runInvestigation("ai");
     await userEvent.click(await screen.findByRole("button", { name: "Approve" }));
     await userEvent.click(await screen.findByRole("button", { name: "Execute approved action" }));
 
@@ -1530,7 +1795,7 @@ describe("Agentic SupportOps operator workflow", () => {
     });
     render(<App />);
     await selectIncident();
-    await userEvent.click(await screen.findByRole("button", { name: "Run AI investigation" }));
+    await runInvestigation("ai");
     await userEvent.click(await screen.findByRole("button", { name: "Approve" }));
     await userEvent.click(await screen.findByRole("button", { name: "Execute approved action" }));
     await screen.findByText("Verification status:");
@@ -1560,11 +1825,15 @@ describe("Agentic SupportOps operator workflow", () => {
       incidentsOverride: [{ ...incidents[0], status: "resolved" }, incidents[1]],
       resolution: async () => jsonResponse([resolvedDecision]),
       post: async (url) => {
+        if (url.endsWith("/investigate")) {
+          return jsonResponse({ incident_id: 1, catalog_id: "INC-001", steps: [], evidence: [] });
+        }
         throw new Error(`Unexpected request: ${url}`);
       },
     });
     render(<App />);
     await selectIncident();
+    await runInvestigation("deterministic");
 
     expect((await screen.findByText("Decision:")).closest("p")).toHaveTextContent("RESOLVE");
     expect(screen.getByText("Incident status:").closest("p")).toHaveTextContent("RESOLVED");
@@ -1588,7 +1857,7 @@ describe("Agentic SupportOps operator workflow", () => {
     });
     render(<App />);
     await selectIncident();
-    await userEvent.click(await screen.findByRole("button", { name: "Run AI investigation" }));
+    await runInvestigation("ai");
     await userEvent.click(await screen.findByRole("button", { name: "Approve" }));
     await userEvent.click(await screen.findByRole("button", { name: "Execute approved action" }));
     await userEvent.click(await screen.findByRole("button", { name: "Resolve incident" }));
