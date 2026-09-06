@@ -576,6 +576,60 @@ describe("Agentic SupportOps operator workflow", () => {
     expect(fetchMock.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(1);
   });
 
+  it("keeps active incident metadata and lifecycle state visible", async () => {
+    installFetch({
+      post: async (url) => url.endsWith("/investigate")
+        ? jsonResponse({
+            incident_id: 1,
+            catalog_id: "INC-001",
+            evidence: [deterministicEvidence],
+            steps: [{
+              id: 30,
+              incident_id: 1,
+              investigation_id: null,
+              tool: "get_disk_usage",
+              target_resource: "app-01",
+              origin: "deterministic",
+              arguments: {},
+              status: "completed",
+              result: {},
+              created_at: "2026-08-28T12:10:00Z",
+              completed_at: "2026-08-28T12:10:01Z",
+            }],
+          })
+        : Promise.reject(new Error(`Unexpected request: ${url}`)),
+    });
+    render(<App />);
+    await selectIncident();
+    await runInvestigation("deterministic");
+
+    const title = await screen.findByRole("heading", { name: "Disk usage alert" });
+    const header = title.closest("header");
+    expect(header).not.toBeNull();
+    const incidentHeader = within(header as HTMLElement);
+    expect(incidentHeader.getByText("INC-001")).toBeVisible();
+    expect(incidentHeader.getByText("Incident status:").closest("p")).toHaveTextContent("OPEN");
+    expect(incidentHeader.getByText("Severity").closest("div")).toHaveTextContent("HIGH");
+    expect(incidentHeader.getByText("Affected resource").closest("div")).toHaveTextContent("app-01");
+    expect(incidentHeader.getByText("Category").closest("div")).toHaveTextContent("infrastructure");
+    expect(incidentHeader.getByText("Updated")).toBeVisible();
+    expect(incidentHeader.getByText("The application host is running low on disk space.")).toBeVisible();
+    expect(incidentHeader.getByRole("button", { name: "Change incident" })).toBeVisible();
+
+    const lifecycle = screen.getByRole("region", { name: "Operational lifecycle" });
+    const stages = within(lifecycle).getAllByRole("listitem");
+    expect(stages).toHaveLength(9);
+    expect(within(stages[0]).getByText("Incident")).toBeVisible();
+    expect(within(stages[0]).getByText("open")).toBeVisible();
+    expect(within(stages[1]).getByText("Investigation")).toBeVisible();
+    expect(within(stages[1]).getByText("recorded")).toBeVisible();
+    expect(within(stages[2]).getByText("Evidence")).toBeVisible();
+    expect(within(stages[2]).getByText("1 records")).toBeVisible();
+    expect(within(stages[3]).getByText("Proposal")).toBeVisible();
+    expect(within(stages[3]).getByText("Not started")).toBeVisible();
+    expect(within(lifecycle).queryByText("Reconciliation")).not.toBeInTheDocument();
+  });
+
   it("selects incidents and clears investigation output from the previous selection", async () => {
     const fetchMock = installFetch({
       post: async (url) => jsonResponse({

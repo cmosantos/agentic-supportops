@@ -144,6 +144,17 @@ export function App() {
                       : aiResult
                         ? "The system synthesized the investigation findings from the evidence shown below."
                         : "Start with a read-only investigation to collect grounded evidence.";
+  const lifecycleSteps = selected ? [
+    ["Incident", selected.status],
+    ["Investigation", investigating ? "running" : aiMetadata?.status ?? (steps.length ? "recorded" : "not_loaded")],
+    ["Evidence", evidence.length ? `${evidence.length} records` : "not_loaded"],
+    ["Proposal", actionProposal ? "recorded" : "not_loaded"],
+    ["Human Approval", actionProposal?.approval_status ?? "not_loaded"],
+    ["Execution", actionExecution?.status ?? "not_loaded"],
+    ["Attempt", !reviewingHistoricalRun ? workflow.actionExecutionAttempt?.status ?? "not_loaded" : "not_loaded"],
+    ["Verification", outcomeVerification?.status ?? "not_loaded"],
+    ["Human Resolution", currentResolution?.decision ?? "not_loaded"],
+  ] : [];
 
   useEffect(() => {
     const controller = new AbortController();
@@ -288,10 +299,42 @@ export function App() {
         <div className="workspace">
           <div className="details" id="operator-workspace" tabIndex={-1}>
             {selected ? <>
-              <header className="incident-header"><div><p className="section-kicker">{selected.catalog_id ?? `Incident #${selected.id}`}</p><h2>{selected.title}</h2><p className="incident-description">{selected.description}</p></div><div className="incident-header-status"><StatusBadge status={selected.status} /><span>{selected.priority} priority</span><button type="button" className="incident-picker-trigger" onClick={openIncidentPicker}>Change incident</button></div></header>
-              <dl className="incident-facts"><div><dt>Severity</dt><dd><StatusBadge status={selected.priority} /></dd></div><div><dt>Affected resource</dt><dd>{selected.affected_resource_id ?? "Not specified"}</dd></div><div><dt>Category</dt><dd>{selected.category}</dd></div><div><dt>Updated</dt><dd>{formatTime(selected.updated_at)}</dd></div></dl>
-              <p className="sr-only"><b>Incident status:</b> {selected.status.toUpperCase()}</p>
-              <section className="lifecycle" aria-label="Operational lifecycle">{[["Incident", selected.status], ["Investigation", investigating ? "running" : aiMetadata?.status ?? (steps.length ? "recorded" : "not_loaded")], ["Evidence", evidence.length ? `${evidence.length} records` : "not_loaded"], ["Proposal", actionProposal ? "recorded" : "not_loaded"], ["Human Approval", actionProposal?.approval_status ?? "not_loaded"], ["Execution", actionExecution?.status ?? "not_loaded"], ["Attempt", !reviewingHistoricalRun ? workflow.actionExecutionAttempt?.status ?? "not_loaded" : "not_loaded"], ["Verification", outcomeVerification?.status ?? "not_loaded"], ["Human Resolution", currentResolution?.decision ?? "not_loaded"]].map(([label, status], index) => { const future = status === "not_loaded"; return <div className={`lifecycle-step ${future ? "future" : toneFor(String(status))}`} key={label}><span className="step-index">{String(index + 1).padStart(2, "0")}</span><span className="step-label">{label}</span><span className="step-state"><span className="step-marker" aria-hidden="true" /><span className="sr-only">{future ? "Upcoming" : displayStatus(String(status))}</span></span></div>; })}</section>
+              <header className="incident-header">
+                <div className="incident-header-main">
+                  <div className="incident-identity">
+                    <p className="incident-catalog"><span>Active incident</span><strong>{selected.catalog_id ?? `Incident #${selected.id}`}</strong></p>
+                    <h2>{selected.title}</h2>
+                  </div>
+                  <div className="incident-header-actions">
+                    <p className="incident-status"><span>Incident status:</span><StatusBadge status={selected.status} /></p>
+                    <button type="button" className="incident-picker-trigger" onClick={openIncidentPicker}>Change incident</button>
+                  </div>
+                </div>
+                <dl className="incident-facts">
+                  <div className="incident-fact-primary"><dt>Severity</dt><dd><StatusBadge status={selected.priority} /></dd></div>
+                  <div className="incident-fact-primary"><dt>Affected resource</dt><dd className="resource-value">{selected.affected_resource_id ?? "Not specified"}</dd></div>
+                  <div><dt>Category</dt><dd>{selected.category}</dd></div>
+                  <div><dt>Updated</dt><dd>{formatTime(selected.updated_at)}</dd></div>
+                </dl>
+                <p className="incident-description">{selected.description}</p>
+              </header>
+              <section className="lifecycle-overview" aria-labelledby="operational-lifecycle-heading">
+                <header className="lifecycle-heading">
+                  <div><p className="section-kicker">Governed workflow</p><h3 id="operational-lifecycle-heading">Operational lifecycle</h3></div>
+                  <span>Persisted state</span>
+                </header>
+                <ol className="lifecycle">
+                  {lifecycleSteps.map(([label, status], index) => {
+                    const future = status === "not_loaded";
+                    const stateLabel = future ? "Not started" : displayStatus(String(status));
+                    return <li className={`lifecycle-step ${future ? "future" : toneFor(String(status))}`} key={label}>
+                      <span className="step-index">{String(index + 1).padStart(2, "0")}</span>
+                      <span className="step-marker" aria-hidden="true" />
+                      <span className="step-copy"><span className="step-label">{label}</span><span className="step-status">{stateLabel}</span></span>
+                    </li>;
+                  })}
+                </ol>
+              </section>
               {!reviewingHistoricalRun && (actionExecution?.status === "outcome_unknown" || actionExecution?.completion_basis === "reconciliation") && <aside className="reconciliation-branch" aria-label="Uncertain outcome path"><span className="branch-icon" aria-hidden="true">↳</span><div><strong>Attempt → Outcome uncertain → Reconciliation → Verification</strong><p>Read current state before any further mutation.</p></div><StatusBadge status={workflow.reconciliation?.status ?? "outcome_unknown"} /></aside>}
               <section className="current-state" aria-label="Current operational state"><div><p className="section-kicker">Current state</p><h3>{currentState}</h3><p className="state-description">{stateDescription}</p><p className="state-detail">{evidence.length} evidence record{evidence.length === 1 ? "" : "s"} available</p></div><div className="next-action"><span>Next action</span><strong>{nextAction}</strong></div></section>
               <section className={`runtime-panel ${actionExecution || actionProposal ? "runtime-context" : ""}`} aria-labelledby="investigation-controls">
