@@ -18,6 +18,18 @@ const runtimeLabels: Record<InvestigationMode, string> = {
   agents_sdk: "Agents SDK",
 };
 
+const runtimeSelectorLabels: Record<InvestigationMode, string> = {
+  deterministic: "Deterministic",
+  ai: "AI Investigation",
+  agents_sdk: "Agents SDK",
+};
+
+const runtimeDescriptions: Record<InvestigationMode, string> = {
+  deterministic: "Deterministic, rule-based investigation",
+  ai: "Model-assisted investigation",
+  agents_sdk: "Agent-based investigation runtime",
+};
+
 const investigationEndpoints: Record<InvestigationMode, InvestigationEndpoint> = {
   deterministic: "investigate",
   ai: "investigate-ai",
@@ -339,9 +351,35 @@ export function App() {
               <section className="current-state" aria-label="Current operational state"><div><p className="section-kicker">Current state</p><h3>{currentState}</h3><p className="state-description">{stateDescription}</p><p className="state-detail">{evidence.length} evidence record{evidence.length === 1 ? "" : "s"} available</p></div><div className="next-action"><span>Next action</span><strong>{nextAction}</strong></div></section>
               <section className={`runtime-panel ${actionExecution || actionProposal ? "runtime-context" : ""}`} aria-labelledby="investigation-controls">
                 <div className="section-heading"><div><p className="section-kicker">Finding</p><h3 id="investigation-controls">Choose a runtime</h3></div><span className="muted">Read-only</span></div>
-                <div className="runtime-control" aria-busy={investigating}><label className="runtime-select" htmlFor="investigation-runtime"><span>Runtime</span><select id="investigation-runtime" aria-label="Investigation runtime" value={selectedRuntime} onChange={(event) => setSelectedRuntime(event.target.value as InvestigationMode)} disabled={investigating} aria-describedby="runtime-help"><option value="deterministic">{runtimeLabels.deterministic}</option><option value="ai" disabled={!aiConfigured}>AI</option><option value="agents_sdk" disabled={!aiConfigured}>{runtimeLabels.agents_sdk}</option></select></label><button className="primary-action runtime-run" onClick={() => runInvestigation(selectedRuntime)} disabled={investigating || (selectedRuntime !== "deterministic" && !aiConfigured)}>{investigating ? "Running investigation…" : "Run investigation"}</button></div>
-                <p id="runtime-help" className="runtime-help">{aiConfigured ? `Selected for the next run · ${runtimeLabels[selectedRuntime]}` : "AI investigation unavailable · Provider not configured. Deterministic remains available."}</p>
-                {investigating && <p className="running" role="status">Investigation in progress. You can select another incident to cancel this view.</p>}
+                <fieldset className="runtime-options" role="radiogroup" aria-labelledby="runtime-options-heading" aria-describedby="runtime-help" disabled={investigating}>
+                  <legend id="runtime-options-heading">Available runtimes</legend>
+                  {(Object.keys(runtimeSelectorLabels) as InvestigationMode[]).map((runtime) => {
+                    const available = runtime === "deterministic" || aiConfigured;
+                    const selectedRuntimeOption = selectedRuntime === runtime;
+                    return (
+                      <label className={`runtime-option ${selectedRuntimeOption ? "selected" : ""} ${available ? "" : "unavailable"}`} key={runtime}>
+                        <input
+                          type="radio"
+                          name="investigation-runtime"
+                          value={runtime}
+                          checked={selectedRuntimeOption}
+                          onChange={() => setSelectedRuntime(runtime)}
+                          disabled={!available || investigating}
+                        />
+                        <span className="runtime-option-copy">
+                          <span className="runtime-option-heading"><strong>{runtimeSelectorLabels[runtime]}</strong>{selectedRuntimeOption && <span className="runtime-selected-label">Selected</span>}</span>
+                          <small>{runtimeDescriptions[runtime]}</small>
+                          <small className={`runtime-availability ${available ? "available" : "unavailable"}`}>{available ? "Available" : "Unavailable · AI provider not configured"}</small>
+                        </span>
+                      </label>
+                    );
+                  })}
+                </fieldset>
+                <div className="runtime-actions">
+                  <button className="primary-action runtime-run" onClick={() => runInvestigation(selectedRuntime)} disabled={investigating || (selectedRuntime !== "deterministic" && !aiConfigured)}>{investigating ? "Running investigation…" : "Run investigation"}</button>
+                </div>
+                <p id="runtime-help" className="runtime-help">{aiConfigured ? `Selected for the next run · ${runtimeSelectorLabels[selectedRuntime]}` : "AI runtimes unavailable · Provider not configured. Deterministic remains available."}</p>
+                {investigating && <p className="running" role="status">Investigation in progress · {runtimeSelectorLabels[selectedRuntime]}. You can select another incident to cancel this view.</p>}
                 {mode && !investigating && <p className="mode"><span>Mode: {mode}</span> · Last run · {runtimeLabels[mode]}</p>}
                 {investigationError && <p className={isCapabilityLimitation(investigationError, selectedRuntime) ? "capability-message" : "error"} role="alert">{isCapabilityLimitation(investigationError, selectedRuntime) ? `Deterministic investigation is not supported for ${selected.catalog_id ?? "this incident"}. ${investigationError}` : investigationError}</p>}
               </section>

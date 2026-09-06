@@ -311,8 +311,7 @@ async function runInvestigation(runtime: "deterministic" | "ai" | "agents_sdk" =
     await userEvent.click(within(dialog).getByRole("button", { name: "Select and run" }));
     return;
   }
-  const selector = await screen.findByRole("combobox", { name: "Investigation runtime" });
-  await userEvent.selectOptions(selector, runtime);
+  await userEvent.click(await screen.findByRole("radio", { name: new RegExp(`^${runtimeLabelsForTests[runtime]}`) }));
   await userEvent.click(await screen.findByRole("button", { name: "Run investigation" }));
 }
 
@@ -410,7 +409,7 @@ describe("Deterministic investigation after model history", () => {
     expect(screen.queryByText("Disk pressure confirmed.")).not.toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Proposed Action" })).not.toBeInTheDocument();
     expect(screen.queryByText("Loading investigation artifacts…")).not.toBeInTheDocument();
-    expect(screen.getByRole("combobox", { name: "Investigation runtime" })).toHaveValue("deterministic");
+    expect(screen.getByRole("radio", { name: /^Deterministic/ })).toBeChecked();
     expect(screen.getByRole("button", { name: "Run investigation" })).toBeEnabled();
     expect(previousRun).toHaveAttribute("aria-pressed", "false");
     expect(within(history).getAllByRole("button")).toHaveLength(1);
@@ -559,6 +558,44 @@ describe("Agentic SupportOps operator workflow", () => {
     expect(within(dialog).getByRole("radio", { name: /^Deterministic/ })).toBeEnabled();
   });
 
+  it("keeps unavailable AI runtimes visible in the active runtime selector", async () => {
+    installFetch();
+    render(<App />);
+
+    await selectIncident();
+    await runInvestigation("deterministic");
+
+    expect(screen.getByRole("radio", { name: /^AI Investigation/ })).toBeDisabled();
+    expect(screen.getByRole("radio", { name: /^Agents SDK/ })).toBeDisabled();
+    expect(screen.getByRole("radio", { name: /^Deterministic/ })).toBeEnabled();
+    expect(screen.getByText(/AI runtimes unavailable · Provider not configured/)).toBeVisible();
+  });
+
+  it("does not start a new investigation when only the runtime is selected", async () => {
+    const fetchMock = installFetch({
+      aiConfigured: true,
+      post: async (url) => {
+        if (url.endsWith("/investigate")) return jsonResponse({ incident_id: 1, catalog_id: "INC-001", steps: [], evidence: [] });
+        if (url.endsWith("/investigate-ai")) return jsonResponse(actionableExecution);
+        throw new Error("Unexpected request: " + url);
+      },
+    });
+    render(<App />);
+
+    await selectIncident();
+    await runInvestigation("deterministic");
+    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(1);
+
+    const aiRuntime = screen.getByRole("radio", { name: /^AI Investigation/ });
+    await userEvent.click(aiRuntime);
+    expect(aiRuntime).toBeChecked();
+    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(1);
+
+    await userEvent.click(screen.getByRole("button", { name: "Run investigation" }));
+    await screen.findByText("Disk pressure confirmed.");
+    expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith("/investigate-ai"))).toHaveLength(1);
+  });
+
   it("reopens the picker from the active incident without starting on incident click", async () => {
     const fetchMock = installFetch();
     render(<App />);
@@ -646,7 +683,7 @@ describe("Agentic SupportOps operator workflow", () => {
     await userEvent.click(await screen.findByText("Observed payload"));
     expect(await screen.findByText(/"used_percent": 94/)).toBeVisible();
     expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith("/incidents/INC-001/investigate"))).toBe(true);
-    expect(screen.getByRole("combobox", { name: "Investigation runtime" })).toHaveValue("deterministic");
+    expect(screen.getByRole("radio", { name: /^Deterministic/ })).toBeChecked();
 
     await selectIncident("DNS resolution failure");
     await runInvestigation("deterministic");
@@ -667,7 +704,7 @@ describe("Agentic SupportOps operator workflow", () => {
     await selectIncident();
     await runInvestigation("deterministic");
     expect(screen.getByRole("button", { name: "Running investigation…" })).toBeDisabled();
-    expect(screen.getByRole("combobox", { name: "Investigation runtime" })).toBeDisabled();
+    expect(screen.getByRole("radio", { name: /^Deterministic/ })).toBeDisabled();
     expect(screen.getByRole("status")).toHaveTextContent("Investigation in progress");
 
     resolveInvestigation(
@@ -757,7 +794,7 @@ describe("Agentic SupportOps operator workflow", () => {
     expect(screen.getByText("Log growth rate is not available.")).toBeVisible();
     expect(screen.getByText(/Human action required/)).toBeVisible();
     expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith("/incidents/INC-001/investigate-ai"))).toBe(true);
-    expect(screen.getByRole("combobox", { name: "Investigation runtime" })).toHaveValue("ai");
+    expect(screen.getByRole("radio", { name: /^AI Investigation/ })).toBeChecked();
   });
 
   it("does not let an older investigation response overwrite a newly selected incident", async () => {
@@ -813,7 +850,7 @@ describe("Agentic SupportOps operator workflow", () => {
     expect(fetchMock.mock.calls.some(([url]) =>
       String(url).endsWith("/investigate-agent-sdk")
     )).toBe(true);
-    expect(screen.getByRole("combobox", { name: "Investigation runtime" })).toHaveValue("agents_sdk");
+    expect(screen.getByRole("radio", { name: /^Agents SDK/ })).toBeChecked();
   });
 
   it("starts the selected incident and runtime only from the explicit picker action", async () => {
@@ -921,7 +958,7 @@ describe("Agentic SupportOps operator workflow", () => {
     await selectIncident();
     await runInvestigation("deterministic");
     expect(await screen.findByText("Persisted deterministic result")).toBeVisible();
-    expect(screen.getByRole("option", { name: "Deterministic" })).toBeVisible();
+    expect(screen.getByRole("radio", { name: /^Deterministic/ })).toBeChecked();
     expect(screen.getByText("#10 · get_disk_usage")).toBeVisible();
     expect(screen.getByText("No model assessment is persisted for this investigation.")).toBeVisible();
   });
