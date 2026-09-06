@@ -1118,6 +1118,12 @@ describe("Agentic SupportOps operator workflow", () => {
     });
     const fetchMock = installFetch({
       aiConfigured: true,
+      attempt: async () => jsonResponse({
+        ...canonicalUnknownAttempt,
+        status: "completed",
+        failure_cause: null,
+        outcome_certainty: "applied_acknowledged",
+      }),
       post: async (url) => {
         if (url.endsWith("/investigate-ai")) return jsonResponse(actionableExecution);
         if (url.endsWith("/action-proposals")) return jsonResponse(executableProposal, 201);
@@ -1139,7 +1145,13 @@ describe("Agentic SupportOps operator workflow", () => {
     expect(screen.queryByRole("button", { name: "Verify outcome" })).not.toBeInTheDocument();
 
     resolveExecution(jsonResponse(completedExecution));
-    expect((await screen.findByText("Execution status:")).closest("div")).toHaveTextContent("COMPLETED");
+    const controlledExecution = await screen.findByRole("region", { name: "Controlled execution" });
+    expect(within(controlledExecution).getByText("Execution status:").closest("div")).toHaveTextContent("COMPLETED");
+    expect(within(controlledExecution).getByText("Capability:").closest("div")).toHaveTextContent("Restart simulated service");
+    expect(within(controlledExecution).getByText("Target:").closest("div")).toHaveTextContent("SUPPORT-API");
+    expect(within(controlledExecution).getByText("Previous state").closest("div")).toHaveTextContent("degraded");
+    expect(within(controlledExecution).getByText("Current state").closest("div")).toHaveTextContent("healthy");
+    expect(await screen.findByRole("article", { name: "Physical attempt #51" })).toHaveTextContent("Known successful result");
     await userEvent.click(screen.getByText("Operational details"));
     await userEvent.click(screen.getByText("Technical result"));
     expect(screen.getByText(/"current_state": "healthy"/)).toBeVisible();
@@ -1198,7 +1210,7 @@ describe("Agentic SupportOps operator workflow", () => {
   });
 
   it("renders OUTCOME_UNKNOWN distinctly without retry or verification controls", async () => {
-    installFetch({
+    const fetchMock = installFetch({
       aiConfigured: true,
       post: async (url) => {
         if (url.endsWith("/investigate-ai")) return jsonResponse(actionableExecution);
@@ -1221,8 +1233,12 @@ describe("Agentic SupportOps operator workflow", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Execute approved action" }));
 
     expect((await screen.findByText("Execution status:")).closest("div")).toHaveTextContent("OUTCOME UNKNOWN");
+    expect(await screen.findByRole("article", { name: "Physical attempt #51" })).toHaveTextContent("Outcome unknown");
+    expect(screen.getByText(/cannot safely determine whether the requested change occurred/i)).toBeVisible();
+    expect(screen.getByText(/neither a confirmed success nor a confirmed failure/i)).toBeVisible();
     expect(screen.getByText(/will not be retried automatically/i)).toBeVisible();
     expect(screen.queryByRole("button", { name: /retry|execute approved|verify outcome/i })).not.toBeInTheDocument();
+    expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith("/execute"))).toHaveLength(1);
   });
 
   it("renders a canonical RUNNING execution without sending another request", async () => {

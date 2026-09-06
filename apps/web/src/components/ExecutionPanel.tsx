@@ -136,37 +136,52 @@ export function ExecutionPanel({ selected, workflow }: Props) {
       </section>}
 
       {actionExecution && <section className="operator-phase outcome-phase" aria-labelledby="outcome-heading">
-        <header className="phase-header"><div><p className="section-kicker">Outcome</p><h3 id="outcome-heading">What happened after the action</h3></div><StatusBadge status={actionExecution.status} /></header>
-        <div className="outcome-summary">
-          <div className="section-heading"><div><p className="section-kicker">Controlled execution</p><h4>Execution</h4></div><StatusBadge status={actionExecution.status} /></div>
-          <dl className="compact-details">
-            <div><dt>Execution status:</dt><dd>{displayStatus(actionExecution.status).toUpperCase()}</dd></div>
+        <header className="phase-header"><div><p className="section-kicker">Controlled execution · Actual operation</p><h3 id="outcome-heading">Execution and outcome certainty</h3></div><StatusBadge status={actionExecution.status} /></header>
+        <section className="outcome-summary" aria-labelledby="controlled-execution-heading">
+          <div className="execution-heading">
+            <div><p className="section-kicker">Mutation record</p><h4 id="controlled-execution-heading">Controlled execution</h4></div>
+            <p>Persisted execution record · This is no longer a proposal</p>
+          </div>
+          <dl className="execution-overview">
+            <div><dt>Execution status:</dt><dd><StatusBadge status={actionExecution.status} /></dd></div>
             <div><dt>Capability:</dt><dd>{displayAction(actionExecution.capability_name)}</dd></div>
             <div><dt>Target:</dt><dd>{actionProposal?.target ?? actionExecution.result?.data?.target ?? "Not recorded"}</dd></div>
-            <div><dt>Completion basis:</dt><dd>{actionExecution.completion_basis ? displayStatus(actionExecution.completion_basis) : "Not recorded"}</dd></div>
+            <div><dt>Outcome certainty:</dt><dd className={`certainty-summary certainty-${outcomeCertainty ?? "not_recorded"}`}><strong>{certaintyLabel(outcomeCertainty)}</strong></dd></div>
           </dl>
-          <p className="record-stamp">Execution #{actionExecution.id} · Requested {formatTime(actionExecution.requested_at)} · Started {formatTime(actionExecution.started_at)}{actionExecution.completed_at ? ` · Completed ${formatTime(actionExecution.completed_at)}` : ""}</p>
-          {actionExecution.result?.data && <dl className="execution-observation">
-            {actionExecution.result.data.target && <><dt>Target</dt><dd>{actionExecution.result.data.target}</dd></>}
-            {actionExecution.result.data.previous_state && <><dt>Previous state</dt><dd>{actionExecution.result.data.previous_state}</dd></>}
-            {actionExecution.result.data.current_state && <><dt>Current state</dt><dd>{actionExecution.result.data.current_state}</dd></>}
-          </dl>}
-        </div>
+          <p className="record-stamp execution-record-meta"><b>Execution #{actionExecution.id}</b> · Completion basis: {actionExecution.completion_basis ? displayStatus(actionExecution.completion_basis) : "Not recorded"} · Requested {formatTime(actionExecution.requested_at)} · Started {formatTime(actionExecution.started_at)}{actionExecution.completed_at ? ` · Completed ${formatTime(actionExecution.completed_at)}` : ""}</p>
+          {actionExecution.status === "running" && <p className="execution-state-note running" role="status"><strong>Execution is in progress.</strong> A persisted execution exists, but no completed result is presented yet.</p>}
+          {actionExecution.status === "completed" && <p className="execution-state-note completed" role="status"><strong>Execution completed.</strong> Known result fields are shown below when recorded. Verification and incident resolution remain separate.</p>}
+          {actionExecution.status === "failed" && <div className="execution-failure" role="alert"><strong>Execution failed.</strong>{actionExecution.error && <p>{actionExecution.error.message}</p>}</div>}
+          {actionExecution.status === "outcome_unknown" && <div className="uncertainty-callout" role="alert" aria-labelledby="outcome-unknown-heading"><strong id="outcome-unknown-heading">Outcome certainty is unknown</strong><p>The physical mutation may have started, but the system cannot safely determine whether the requested change occurred.</p><p>Because the outcome is uncertain, automatic retry is unsafe. The original mutation will not be retried automatically.</p><small>This is neither a confirmed success nor a confirmed failure.</small></div>}
+          {actionExecution.result?.data && <section className="known-result" aria-labelledby="known-result-heading">
+            <div><p className="section-kicker">Structured result</p><h5 id="known-result-heading">Known execution result</h5></div>
+            <p>Reported by the controlled execution. Independent verification remains separate.</p>
+            <dl className="state-comparison">
+              {actionExecution.result.data.target && <div><dt>Reported target</dt><dd>{actionExecution.result.data.target}</dd></div>}
+              {actionExecution.result.data.previous_state && <div><dt>Previous state</dt><dd>{actionExecution.result.data.previous_state}</dd></div>}
+              {actionExecution.result.data.current_state && <div><dt>Current state</dt><dd>{actionExecution.result.data.current_state}</dd></div>}
+            </dl>
+          </section>}
+        </section>
 
-        {actionExecutionAttempt && <article className="attempt-inline" aria-label="Physical mutation attempt">
-          <div className="section-heading"><div><p className="section-kicker">Physical attempt</p><h4>Attempt #{actionExecutionAttempt.id}</h4></div><div><StatusBadge status={actionExecutionAttempt.status} /> <StatusBadge status={outcomeCertainty ?? "not_recorded"} /></div></div>
-          <p><b>Attempt:</b> {actionExecutionAttempt.attempt_number} · <b>Capability:</b> {displayAction(actionExecution.capability_name)}</p>
-          <p><b>Outcome certainty:</b> <span className="certainty-label">{certaintyLabel(outcomeCertainty)}</span> · <b>Started:</b> {formatTime(actionExecutionAttempt.invocation_started_at)}{actionExecutionAttempt.completed_at ? ` · Recorded ${formatTime(actionExecutionAttempt.completed_at)}` : ""}</p>
+        {actionExecutionAttempt && <article className="attempt-inline" aria-label={`Physical attempt #${actionExecutionAttempt.id}`}>
+          <div className="section-heading"><div><p className="section-kicker">Physical mutation record</p><h4>Physical attempt #{actionExecutionAttempt.id}</h4></div></div>
+          <p className="attempt-context">Execution #{actionExecution.id} is the higher-level lifecycle record. This persisted attempt identifies the physical invocation separately.</p>
+          <dl className="attempt-overview">
+            <div><dt>Attempt status:</dt><dd><StatusBadge status={actionExecutionAttempt.status} /></dd></div>
+            <div><dt>Outcome certainty:</dt><dd><StatusBadge status={outcomeCertainty ?? "not_recorded"} /> <span className="certainty-label">{certaintyLabel(outcomeCertainty)}</span></dd></div>
+            <div><dt>Invocation number:</dt><dd>{actionExecutionAttempt.attempt_number}</dd></div>
+            <div><dt>Capability:</dt><dd>{displayAction(actionExecution.capability_name)}</dd></div>
+          </dl>
+          <p className="record-stamp">Started {formatTime(actionExecutionAttempt.invocation_started_at)}{actionExecutionAttempt.completed_at ? ` · Recorded ${formatTime(actionExecutionAttempt.completed_at)}` : ""}</p>
           {actionExecutionAttempt.failure_cause && <p className="attempt-failure"><b>Failure / uncertainty:</b> {actionExecutionAttempt.failure_cause}</p>}
         </article>}
-        {!actionExecutionAttempt && <p className="empty-state">Physical attempt record is not available in this view.</p>}
-        {actionExecution.status === "running" && <p role="status">Execution is in progress.</p>}
-        {actionExecution.status === "failed" && actionExecution.error && <p className="error" role="alert">{actionExecution.error.message}</p>}
-        {actionExecution.status === "outcome_unknown" && <div className="uncertainty-callout" role="alert"><strong>Outcome certainty is unknown</strong><p>The mutation may have started, so automatic retry is unsafe. The action will not be retried automatically.</p><small>Current system state must be checked before another mutation can be attempted.</small></div>}
+        {!actionExecutionAttempt && <p className="attempt-unavailable" role="status"><strong>Execution record #{actionExecution.id} exists.</strong> No physical attempt record is available in this view.</p>}
 
         <details className="technical-details outcome-details">
           <summary>Operational details</summary>
           {actionExecution.result?.data && <details><summary>Technical result</summary><pre>{JSON.stringify(actionExecution.result.data, null, 2)}</pre></details>}
+          {actionExecution.error && <details><summary>Execution error record</summary><pre>{JSON.stringify(actionExecution.error, null, 2)}</pre></details>}
           <section className="execution-timeline" aria-label="Execution Timeline">
             <div className="section-heading"><div><p className="section-kicker">Audit</p><h4>Execution Timeline</h4></div><span className="count">{executionTimeline.length}</span></div>
             {timelineLookupStatus === "loading" && <p role="status">Loading execution timeline…</p>}
