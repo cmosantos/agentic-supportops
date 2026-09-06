@@ -9,6 +9,7 @@ type Props = {
 };
 
 function runtimeLabel(mode: string): string {
+  if (mode === "deterministic") return "Deterministic";
   return mode === "agents_sdk" ? "Agents SDK" : "Responses API";
 }
 
@@ -19,7 +20,7 @@ export function InvestigationHistory({ runs, loading, selectedRunId, onSelect }:
         <div><p className="section-kicker">Context</p><h3 id="investigation-history">Previous investigations</h3></div>
         <span className="muted">{loading ? "Loading…" : `${runs.length} run${runs.length === 1 ? "" : "s"}`}</span>
       </div>
-      {runs.length === 0 && !loading ? <p className="empty-state">No previous model investigations are recorded.</p> : runs.length > 0 && (
+      {runs.length === 0 && !loading ? <p className="empty-state">No previous investigations are recorded.</p> : runs.length > 0 && (
         <details className="history-disclosure" open={selectedRunId !== null}>
           <summary>View previous runs · {runs.length} recorded</summary>
           <div className="run-history">

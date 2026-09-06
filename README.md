@@ -4,7 +4,7 @@
 
 Agentic SupportOps is a local-first engineering project for controlled IT support investigations. It explores how deterministic workflows and model-guided runtimes can investigate the same incident through governed, read-only capabilities while preserving an auditable execution history.
 
-This is not a general-purpose chatbot. The unit of work is an incident. An investigation gathers factual evidence, and model-guided execution creates a run, records ordered lifecycle/tool events, and finishes with a structured result. Historical runs remain available while existing latest-state APIs stay compatible.
+This is not a general-purpose chatbot. The unit of work is an incident. Every investigation creates a persisted run and gathers factual, run-scoped evidence. Model-guided execution also records ordered lifecycle/tool events and finishes with a structured result. Historical runs remain available while existing latest-state APIs stay compatible.
 
 ## ✅ What is implemented
 
@@ -66,7 +66,7 @@ The frontend never talks to MCP directly; it calls FastAPI. MCP is an internal a
 ## 🔄 Investigation lifecycle
 
 1. An operator selects an incident and a supported deterministic or model-guided investigation.
-2. Deterministic execution resolves a playbook. Model-guided execution creates a persisted run for `manual_responses` or `agents_sdk`.
+2. The application creates a persisted run. Deterministic execution resolves a playbook; model-guided execution selects either `manual_responses` or `agents_sdk`.
 3. The runtime appends `run_started`, model-turn, and tool lifecycle events in sequence order. In the Agents SDK path, the orchestrator delegates relevant diagnostic questions to specialists exposed as agent-tools and retains ownership of the final result.
 4. Tool calls pass through the canonical registry, which validates exact names and string arguments before executing a read-only capability.
 5. Successful tool observations become evidence with a stable ID and the owning `investigation_id`; every tool outcome becomes a similarly scoped investigation step.

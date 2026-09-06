@@ -178,13 +178,49 @@ def test_locked_identity_golden_journey(seeded_client: TestClient) -> None:
 def test_deterministic_golden_playbooks_persist_run_scoped_evidence(
     seeded_client: TestClient,
 ) -> None:
-    database = seeded_client.post("/incidents/INC-024/investigate")
-    identity = seeded_client.post("/incidents/INC-026/investigate")
+    simulation = SimulationRepository()
+    previous_tools = app.dependency_overrides.get(get_controlled_tools)
+    app.dependency_overrides[get_controlled_tools] = lambda: InvestigationToolRegistry(
+        simulation
+    )
+    before = (
+        simulation.get_application("CONTOSO-DB").status,
+        simulation.get_user("USR-FRANK").account.locked,
+    )
+    try:
+        database = seeded_client.post("/incidents/INC-024/investigate")
+        identity = seeded_client.post("/incidents/INC-026/investigate")
+    finally:
+        if previous_tools is None:
+            app.dependency_overrides.pop(get_controlled_tools, None)
+        else:
+            app.dependency_overrides[get_controlled_tools] = previous_tools
 
     assert database.status_code == 200, database.text
     assert identity.status_code == 200, identity.text
-    assert all(item["origin"] == "deterministic" for item in database.json()["evidence"])
-    assert all(item["origin"] == "deterministic" for item in identity.json()["evidence"])
+    for response in (database, identity):
+        body = response.json()
+        run = body["investigation"]
+        assert run["mode"] == "deterministic"
+        assert run["status"] == "completed"
+        assert run["result"] is None
+        assert run["usage"]["runtime"] == "deterministic"
+        assert all(item["origin"] == "deterministic" for item in body["evidence"])
+        assert all(
+            item["investigation_id"] == run["id"]
+            for item in [*body["steps"], *body["evidence"]]
+        )
+        assert all(
+            item["tool"] in InvestigationToolRegistry().names
+            for item in body["steps"]
+        )
+        artifacts = seeded_client.get(
+            f"/incidents/{body['catalog_id']}/investigation-runs/{run['id']}/artifacts"
+        )
+        assert artifacts.status_code == 200, artifacts.text
+        assert artifacts.json()["evidence"] == body["evidence"]
+        assert artifacts.json()["steps"] == body["steps"]
+
     assert seeded_client.get("/incidents/INC-024/evidence").json() == database.json()["evidence"]
     assert seeded_client.get("/incidents/INC-026/evidence").json() == identity.json()["evidence"]
     database_ids = {item["id"] for item in database.json()["evidence"]}
@@ -192,3 +228,7 @@ def test_deterministic_golden_playbooks_persist_run_scoped_evidence(
     assert database_ids.isdisjoint(identity_ids)
     assert all(item["incident_id"] != identity.json()["incident_id"] for item in database.json()["evidence"])
     assert all(item["incident_id"] != database.json()["incident_id"] for item in identity.json()["evidence"])
+    assert (
+        simulation.get_application("CONTOSO-DB").status,
+        simulation.get_user("USR-FRANK").account.locked,
+    ) == before

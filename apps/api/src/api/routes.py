@@ -6,7 +6,7 @@ from agents import Model
 
 from api.dependencies import get_agents_sdk_model, get_controlled_tools, get_db_session, get_responses_gateway, get_trace_boundary
 from core.config import settings
-from domain.ai import AIInvestigationExecution, AIInvestigationRead, InvestigationEventRead, InvestigationRuntime
+from domain.ai import AIInvestigationExecution, AIInvestigationRead, DeterministicInvestigationExecution, InvestigationEventRead, InvestigationRuntime
 from db.models import IncidentRecord
 from domain.incident import IncidentCreate, IncidentRead
 from domain.investigation import (
@@ -136,12 +136,24 @@ def get_incident(incident_id: str, session: DatabaseSession) -> IncidentRead:
     return IncidentRead.model_validate(incident)
 
 
-@router.post("/incidents/{incident_id}/investigate", response_model=InvestigationRead)
-def investigate_incident(incident_id: str, session: DatabaseSession) -> InvestigationRead:
+@router.post(
+    "/incidents/{incident_id}/investigate",
+    response_model=DeterministicInvestigationExecution,
+)
+def investigate_incident(
+    incident_id: str,
+    session: DatabaseSession,
+    tools: ControlledToolsDependency,
+) -> DeterministicInvestigationExecution:
     incident = _incident_or_404(incident_id, session)
-    service = InvestigationService(InvestigationRepository(session))
+    service = InvestigationService(InvestigationRepository(session), tools)
     try:
         return service.investigate(incident)
+    except ActiveInvestigationExistsError as error:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": "investigation_already_running", "message": str(error)},
+        ) from error
     except (UnsupportedInvestigationError, InvalidInvestigationContextError) as error:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -400,11 +412,12 @@ def get_historical_investigation_artifacts(
                 "message": "Investigation run not found",
             },
         )
-    origin = (
-        InvestigationOrigin.AGENTS_SDK
-        if run.mode == "agents_sdk"
-        else InvestigationOrigin.AI
-    )
+    if run.mode == "agents_sdk":
+        origin = InvestigationOrigin.AGENTS_SDK
+    elif run.mode == "deterministic":
+        origin = InvestigationOrigin.DETERMINISTIC
+    else:
+        origin = InvestigationOrigin.AI
     return AIInvestigationExecution(
         investigation=AIInvestigationRead.model_validate(run),
         evidence=[

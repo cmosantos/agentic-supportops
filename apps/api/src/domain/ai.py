@@ -139,6 +139,11 @@ class AIInvestigationExecution(BaseModel):
     steps: list[InvestigationStepRead]
 
 
+class DeterministicInvestigationExecution(AIInvestigationExecution):
+    incident_id: int
+    catalog_id: str | None
+
+
 class InvestigationEventRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

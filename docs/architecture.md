@@ -279,7 +279,7 @@ This permits one manual Responses run and one Agents SDK run for the same incide
 
 Terminal consistency uses one transaction. The recorder adds `run_completed` or `run_failed` with `commit=False`; completion/failure updates the run and commits both. Commit failure rolls both changes back.
 
-Evidence and InvestigationSteps are different from events but are now append-oriented for model-guided runs. New records carry the current `AIInvestigationRecord.id` as `investigation_id`; historical artifact retrieval filters by that stable relationship. Legacy rows remain readable with a null association, while deterministic evidence retains its existing incident/origin materialized-view behavior.
+Evidence and InvestigationSteps are different from events and are append-oriented for every runtime. New records carry the current `AIInvestigationRecord.id` as `investigation_id`; historical artifact retrieval filters by that stable relationship. Legacy deterministic rows remain readable with a null association, while new deterministic playbook runs use the same run-scoped relationship as the optional model runtimes.
 
 ## SQLite compatibility
 

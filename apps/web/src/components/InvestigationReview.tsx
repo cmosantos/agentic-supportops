@@ -69,9 +69,9 @@ function EvidenceReference({ label, ids, evidence }: { label: string; ids: numbe
 export function InvestigationReview({ mode, run, status, result, evidence, steps, events, proposal, loading, error, includeProposal = true }: Props) {
   if (!mode && !loading && !error) return null;
 
-  const scopedEvidence = mode === "deterministic"
-    ? evidence.filter((item) => item.origin === "deterministic" && item.investigation_id === null)
-    : run ? evidence.filter((item) => item.investigation_id === run.id) : evidence;
+  const scopedEvidence = run
+    ? evidence.filter((item) => item.investigation_id === run.id)
+    : mode === "deterministic" ? evidence.filter((item) => item.origin === "deterministic") : evidence;
   const scopedSteps = run ? steps.filter((item) => item.investigation_id === run.id) : steps;
   const scopedEvents = run ? events.filter((item) => item.investigation_id === run.id) : events;
   const proposalEvidenceIds = proposal?.supporting_evidence_ids ?? [];
@@ -107,7 +107,7 @@ export function InvestigationReview({ mode, run, status, result, evidence, steps
             </> : <div><dt>Record</dt><dd>Deterministic investigation record</dd></div>}
           </dl>
         </details>
-        {mode === "deterministic" && <p className="context-note">Deterministic investigations do not create model assessments or model run records. This view shows the persisted steps and evidence returned by the deterministic investigation.</p>}
+        {mode === "deterministic" && <p className="context-note">Deterministic investigations do not create model assessments. This view shows the persisted playbook run, steps, and evidence.</p>}
       </>}
 
       {mode && <div className="finding-layout">

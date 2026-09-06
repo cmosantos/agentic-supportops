@@ -364,6 +364,38 @@ function deterministicResponse(journey: typeof deterministicJourneys[number]) {
 }
 
 describe("Deterministic investigation after model history", () => {
+  it("renders run-scoped evidence from the deterministic runtime contract", async () => {
+    const journey = deterministicJourneys[0];
+    const legacy = deterministicResponse(journey);
+    const run = {
+      ...actionableExecution.investigation,
+      id: 30,
+      mode: "deterministic",
+      model: "deterministic-playbook",
+      result: null,
+      usage: { ...actionableExecution.investigation.usage, runtime: "deterministic" },
+    };
+    const response = {
+      ...legacy,
+      investigation: run,
+      evidence: legacy.evidence.map((item) => ({ ...item, investigation_id: run.id })),
+      steps: legacy.steps.map((item) => ({ ...item, investigation_id: run.id })),
+    };
+    installFetch({
+      incidentsOverride: [{ ...incidents[0], catalog_id: journey.catalog, title: journey.title }],
+      post: async () => jsonResponse(response),
+    });
+
+    render(<App />);
+    await selectIncident(journey.title);
+    await runInvestigation("deterministic");
+
+    expect(await screen.findByText("#100 · get_application_health")).toBeVisible();
+    expect(screen.getAllByText("#30")).toHaveLength(2);
+    expect(screen.getByRole("region", { name: "Investigation history" })).toHaveTextContent("Deterministic");
+    expect(screen.getByText(/This view shows the persisted playbook run, steps, and evidence/)).toBeVisible();
+  });
+
   it.each(deterministicJourneys.flatMap((journey) =>
     (["ai", "agents_sdk"] as const).map((runtime) => ({ ...journey, runtime })),
   ))("shows only the $catalog playbook activity after reviewing $runtime", async (journey) => {

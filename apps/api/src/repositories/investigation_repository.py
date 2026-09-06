@@ -147,9 +147,7 @@ class InvestigationRepository:
             {
                 "supportops.persistence.operation": "start_investigation",
                 "supportops.incident_id": incident_id,
-                "supportops.runtime": (
-                    "agents_sdk" if mode == "agents_sdk" else "manual_responses"
-                ),
+                "supportops.runtime": self._runtime_for_mode(mode),
             },
         ):
             return self._start_ai_run(incident_id, model, mode)
@@ -162,9 +160,7 @@ class InvestigationRepository:
             mode=mode,
             status=AIInvestigationStatus.RUNNING,
             model=model,
-            usage=ProviderUsage(
-                runtime="agents_sdk" if mode == "agents_sdk" else "manual_responses"
-            ).model_dump(),
+            usage=ProviderUsage(runtime=self._runtime_for_mode(mode)).model_dump(),
         )
         self._session.add(record)
         try:
@@ -172,6 +168,20 @@ class InvestigationRepository:
         except IntegrityError as error:
             self._session.rollback()
             raise ActiveInvestigationExistsError(incident_id, mode) from error
+        self._session.refresh(record)
+        return record
+
+    def complete_deterministic_run(
+        self, record: AIInvestigationRecord
+    ) -> AIInvestigationRecord:
+        self._require_running(record)
+        record.status = AIInvestigationStatus.COMPLETED
+        record.result = None
+        record.response_id = None
+        record.usage = ProviderUsage(runtime="deterministic").model_dump()
+        record.error = None
+        record.completed_at = datetime.now(timezone.utc)
+        self._commit()
         self._session.refresh(record)
         return record
 
@@ -337,6 +347,14 @@ class InvestigationRepository:
         except Exception:
             self._session.rollback()
             raise
+
+    @staticmethod
+    def _runtime_for_mode(mode: str) -> str:
+        if mode == "agents_sdk":
+            return "agents_sdk"
+        if mode == "deterministic":
+            return "deterministic"
+        return "manual_responses"
 
 
 class ActiveInvestigationExistsError(RuntimeError):

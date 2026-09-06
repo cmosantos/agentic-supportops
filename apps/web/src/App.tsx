@@ -254,7 +254,7 @@ export function App() {
       const artifacts: AIExecution = artifactsResponse.data;
       if (version !== investigationVersion.current || runVersion !== reviewVersion.current) return;
       setEvidence(artifacts.evidence); setSteps(artifacts.steps); setAiResult(artifacts.investigation.result); setAiMetadata({ status: artifacts.investigation.status, model: artifacts.investigation.model });
-      const historicalMode = artifacts.investigation.mode === "agents_sdk" ? "agents_sdk" : "ai";
+      const historicalMode = artifacts.investigation.mode === "deterministic" ? "deterministic" : artifacts.investigation.mode === "agents_sdk" ? "agents_sdk" : "ai";
       setMode(historicalMode); setSelectedRuntime(historicalMode); setEvents(eventsResponse.data); workflow.showHistoricalProposal(proposalsResponse.data.at(-1) ?? null);
     } catch (error: unknown) {
       if (!controller.signal.aborted && version === investigationVersion.current && runVersion === reviewVersion.current) setReviewError(error instanceof Error ? error.message : "History loading failed");
@@ -289,8 +289,15 @@ export function App() {
         void supportOpsApi.getEvents(reference, result.investigation.id, controller.signal).then(async (eventResponse) => eventResponse.ok ? eventResponse.data : []).then((items: InvestigationEvent[]) => { if (requestVersion === investigationVersion.current) setEvents(items); }).catch(() => undefined);
         if (result.investigation.result?.proposed_action) await workflow.loadProposedAction(reference, result.investigation.id, result.investigation.result.proposed_action, controller.signal, requestVersion);
       } else {
-        const result = response.data as Investigation;
-        setEvidence(result.evidence); setSteps(result.steps); setSelectedRunId(null);
+        const result = response.data as Investigation | AIExecution;
+        setEvidence(result.evidence); setSteps(result.steps);
+        if ("investigation" in result) {
+          setAiMetadata({ status: result.investigation.status, model: result.investigation.model }); setSelectedRunId(result.investigation.id);
+          setInvestigationRuns((current) => [result.investigation, ...current.filter((item) => item.id !== result.investigation.id)]);
+          void supportOpsApi.getEvents(reference, result.investigation.id, controller.signal).then(async (eventResponse) => eventResponse.ok ? eventResponse.data : []).then((items: InvestigationEvent[]) => { if (requestVersion === investigationVersion.current) setEvents(items); }).catch(() => undefined);
+        } else {
+          setSelectedRunId(null);
+        }
       }
     } catch (error: unknown) {
       if (controller.signal.aborted || requestVersion !== investigationVersion.current) return;
