@@ -26,14 +26,12 @@ type Props = {
 
 function runtimeLabel(mode: InvestigationReviewMode): string {
   if (mode === "deterministic") return "Deterministic";
-  return mode === "agents_sdk" ? "Agents SDK" : "Responses API";
+  return mode === "agents_sdk" ? "Agents SDK" : "AI";
 }
 
 function eventLabel(event: InvestigationEvent): string {
   const toolName = typeof event.metadata.tool_name === "string" ? event.metadata.tool_name : null;
-  if (event.metadata.kind === "agent_delegation") {
-    return `${toolName ?? "Specialist"} · specialist delegation`;
-  }
+  if (event.metadata.kind === "agent_delegation") return `${toolName ?? "Specialist"} · specialist delegation`;
   return toolName ?? displayStatus(event.event_type);
 }
 
@@ -42,17 +40,28 @@ function idsForEvidence(ids: number[], evidence: Evidence[]): number[] {
   return ids.filter((id) => persisted.has(id));
 }
 
+function payloadSummary(payload: Record<string, unknown>): string {
+  const entries = Object.entries(payload).slice(0, 3);
+  if (entries.length === 0) return "Observation recorded without a summarized payload.";
+  return entries.map(([key, value]) => {
+    const readable = typeof value === "object" && value !== null ? JSON.stringify(value) : String(value);
+    return `${displayStatus(key)}: ${readable}`;
+  }).join(" · ");
+}
+
+function reviewContextLabel(mode: InvestigationReviewMode, run: InvestigationRun | null, includeProposal: boolean): string {
+  if (run && includeProposal) return "Historical run";
+  if (run) return "Selected run";
+  return mode === "deterministic" ? "Persisted deterministic result" : "Current run";
+}
+
 function EvidenceReference({ label, ids, evidence }: { label: string; ids: number[]; evidence: Evidence[] }) {
   if (ids.length === 0) return <p><b>{label}:</b> None recorded</p>;
   const persisted = new Set(evidence.map((item) => item.id));
   return (
     <p>
       <b>{label}:</b>{" "}
-      {ids.map((id) => (
-        <span className={persisted.has(id) ? "provenance-id" : "provenance-id missing"} key={id}>
-          #{id}{persisted.has(id) ? "" : " · unavailable in this run"}
-        </span>
-      ))}
+      {ids.map((id) => <span className={persisted.has(id) ? "provenance-id" : "provenance-id missing"} key={id}>#{id}{persisted.has(id) ? "" : " · unavailable in this run"}</span>)}
     </p>
   );
 }
@@ -62,119 +71,113 @@ export function InvestigationReview({ mode, run, status, result, evidence, steps
 
   const scopedEvidence = mode === "deterministic"
     ? evidence.filter((item) => item.origin === "deterministic" && item.investigation_id === null)
-    : run
-      ? evidence.filter((item) => item.investigation_id === run.id)
-      : evidence;
+    : run ? evidence.filter((item) => item.investigation_id === run.id) : evidence;
   const scopedSteps = run ? steps.filter((item) => item.investigation_id === run.id) : steps;
   const scopedEvents = run ? events.filter((item) => item.investigation_id === run.id) : events;
   const proposalEvidenceIds = proposal?.supporting_evidence_ids ?? [];
   const assessmentEvidenceIds = result?.evidence_ids ?? [];
+  const reviewStatus = status ?? run?.status ?? null;
+  const reviewContext = mode ? reviewContextLabel(mode, run, includeProposal) : null;
 
   return (
-    <section className="investigation-review" aria-labelledby="investigation-review">
-      <div className="panel review-header">
-        <div className="panel-heading">
-          <div>
-            <p className="section-kicker">Investigation review</p>
-            <h3 id="investigation-review">Run provenance</h3>
-          </div>
-          {status && <StatusBadge status={status} />}
+    <section className="finding-section" aria-labelledby="finding-heading">
+      <header className="finding-header">
+        <div><p className="section-kicker">Investigation review</p><h3 id="finding-heading">What the system discovered</h3></div>
+        {reviewStatus && <StatusBadge status={reviewStatus} />}
+      </header>
+      {loading && <p role="status">Loading investigation artifacts…</p>}
+      {error && <p className="error error-banner">{error}</p>}
+
+      {mode && <>
+        <div className="finding-context" aria-label="Review context">
+          <div><span>Runtime</span><strong>{runtimeLabel(mode)}</strong></div>
+          {reviewStatus && <div><span>Status</span><StatusBadge status={reviewStatus} /></div>}
+          {run?.model && <div><span>Model</span><strong className="technical-value">{reviewStatus ? `${reviewStatus} · ` : ""}{run.model}</strong></div>}
+          {run && <div><span>Run</span><strong className="technical-value">#{run.id}</strong></div>}
+          <div><span>Review</span><strong>{reviewContext}</strong></div>
         </div>
-        {loading && <p role="status">Loading investigation artifacts…</p>}
-        {error && <p className="error error-banner">{error}</p>}
-        {mode && (
-          <dl className="review-metadata">
-            <div><dt>Runtime</dt><dd>{runtimeLabel(mode)}</dd></div>
-            {run ? (
-              <>
-                <div><dt>Run</dt><dd>#{run.id}</dd></div>
-                {run.model && <div><dt>Assessment</dt><dd>{status ?? run.status} · {run.model}</dd></div>}
-                <div><dt>Started</dt><dd>{formatTime(run.created_at)}</dd></div>
-                <div><dt>Completed</dt><dd>{formatTime(run.completed_at)}</dd></div>
-              </>
-            ) : (
-              <div><dt>Record</dt><dd>Persisted deterministic result</dd></div>
-            )}
+        <details className="technical-details provenance-details"><summary>Run provenance</summary>
+          <dl className="detail-list">
+            <div><dt>Runtime</dt><dd>{runtimeLabel(mode)} runtime</dd></div>
+            {run ? <>
+              <div><dt>Run</dt><dd>#{run.id}</dd></div>
+              {run.model && <div><dt>Assessment</dt><dd>{status ?? run.status} · model {run.model}</dd></div>}
+              <div><dt>Started</dt><dd>{formatTime(run.created_at)}</dd></div>
+              <div><dt>Completed</dt><dd>{formatTime(run.completed_at)}</dd></div>
+            </> : <div><dt>Record</dt><dd>Deterministic investigation record</dd></div>}
           </dl>
-        )}
-        {mode === "deterministic" && (
-          <p className="human-control">Deterministic investigations do not create model assessments or model run records. This view shows the persisted steps and evidence returned by the deterministic investigation.</p>
-        )}
-      </div>
+        </details>
+        {mode === "deterministic" && <p className="context-note">Deterministic investigations do not create model assessments or model run records. This view shows the persisted steps and evidence returned by the deterministic investigation.</p>}
+      </>}
 
-      {mode && (
-        <div className="review-grid">
-          <article className="panel review-assessment">
-            <div className="panel-heading"><div><p className="section-kicker">AI assessment</p><h4>Assessment</h4></div><span className="count">{result ? `${Math.round(result.confidence * 100)}%` : "—"}</span></div>
-            {result ? (
-              <>
-                <p><b>Summary:</b> {result.summary}</p>
-                <p><b>Assessment:</b> {result.diagnosis}</p>
-                <p><b>Confidence:</b> {Math.round(result.confidence * 100)}%</p>
-                <EvidenceReference label="Evidence references" ids={assessmentEvidenceIds} evidence={scopedEvidence} />
-                {result.supporting_evidence.length > 0 && (
-                  <details><summary>Supporting observations</summary><ul>{result.supporting_evidence.map((item) => <li key={item}>{item}</li>)}</ul></details>
-                )}
-                {result.missing_information.length > 0 && (
-                  <details open><summary>Missing information</summary><ul>{result.missing_information.map((item) => <li key={item}>{item}</li>)}</ul></details>
-                )}
-                <p><b>Human action required:</b> {result.human_action_required ? "Yes" : "No"}</p>
-              </>
-            ) : (
-              <p className="empty-state">No model assessment is persisted for this investigation.</p>
-            )}
+      {mode && <div className="finding-layout">
+        <article className="finding-brief" aria-labelledby="finding-summary-heading">
+          <div className="section-heading"><div><p className="section-kicker">Finding / Summary</p><h4 id="finding-summary-heading">Assessment</h4></div><span className="confidence-value">{result ? `${Math.round(result.confidence * 100)}%` : "—"}</span></div>
+          {result ? <>
+            <p className="finding-summary"><span>Summary</span><strong>{result.summary}</strong></p>
+            <p className="finding-diagnosis"><b>Assessment:</b> {result.diagnosis}</p>
+            <p className="finding-confidence"><b>Confidence:</b> {Math.round(result.confidence * 100)}%</p>
+            <div className="confidence-meter" aria-label={`Confidence ${Math.round(result.confidence * 100)} percent`}><span style={{ width: `${Math.round(result.confidence * 100)}%` }} /></div>
+            <EvidenceReference label="Evidence references" ids={assessmentEvidenceIds} evidence={scopedEvidence} />
+            {result.supporting_evidence.length > 0 && <details><summary>Supporting observations</summary><ul>{result.supporting_evidence.map((item) => <li key={item}>{item}</li>)}</ul></details>}
+            {result.missing_information.length > 0 && <details open><summary>Missing information</summary><ul>{result.missing_information.map((item) => <li key={item}>{item}</li>)}</ul></details>}
+            <p className={result.human_action_required ? "human-action-required" : "human-action-neutral"}><b>Human action required:</b> {result.human_action_required ? "Yes" : "No"}</p>
+          </> : <p className="empty-state">No model assessment is persisted for this investigation.</p>}
+        </article>
+
+        <article className="evidence-list" aria-labelledby="review-evidence">
+          <div className="section-heading"><div><p className="section-kicker">What was observed</p><h4 id="review-evidence">Evidence</h4></div><span className="count">{scopedEvidence.length}</span></div>
+          {scopedEvidence.length === 0 ? <p className="empty-state">No persisted evidence is available for this investigation.</p> : scopedEvidence.map((item) => <article className="evidence-item" key={item.id}>
+            <div className="evidence-item-heading"><div><span className="evidence-label">Evidence</span><strong>#{item.id} · {item.source}</strong></div><span className="evidence-source">{item.source}</span></div>
+            <dl className="evidence-facts">
+              <div><dt>Source</dt><dd>{item.source}</dd></div>
+              <div><dt>Target</dt><dd>{item.resource}</dd></div>
+              <div><dt>Origin</dt><dd>{displayStatus(item.origin)}</dd></div>
+              <div><dt>Recorded</dt><dd>{formatTime(item.created_at)}</dd></div>
+            </dl>
+            <p className="evidence-observation"><span>Observation / result</span>{payloadSummary(item.payload)}</p>
+            {(assessmentEvidenceIds.includes(item.id) || proposalEvidenceIds.includes(item.id)) && <div className="evidence-relations" aria-label="Evidence relationships">
+              <span>Supports</span>
+              {assessmentEvidenceIds.includes(item.id) && <span className="provenance-id">Assessment</span>}
+              {proposalEvidenceIds.includes(item.id) && <span className="provenance-id proposal-reference">Proposed action</span>}
+            </div>}
+            <details><summary>Observed payload</summary><pre>{JSON.stringify(item.payload, null, 2)}</pre></details>
+          </article>)}
+        </article>
+      </div>}
+
+      {includeProposal && <aside className="proposal-callout" aria-labelledby="review-proposal">
+        <header className="proposal-header">
+          <div><p className="section-kicker">Investigation output</p><h4 id="review-proposal">Proposed Action</h4></div>
+          <span className="proposal-state">Proposal only</span>
+        </header>
+        {proposal ? <>
+          <p className="proposal-note">Produced by the investigation; it has not been executed in this review.</p>
+          <dl className="proposal-details">
+            <div><dt>Action</dt><dd>{displayAction(proposal.action_type)}</dd></div>
+            <div><dt>Target</dt><dd>{proposal.target}</dd></div>
+            <div><dt>Risk</dt><dd>{proposal.risk_level}</dd></div>
+            <div><dt>Approval</dt><dd>{displayStatus(proposal.approval_status)}</dd></div>
+          </dl>
+          <EvidenceReference label="Proposal evidence" ids={proposalEvidenceIds} evidence={scopedEvidence} />
+        </> : <p className="empty-state">No action proposal was recorded for this investigation.</p>}
+      </aside>}
+
+      {mode && <details className="technical-details">
+        <summary>Technical details · {scopedSteps.length} activity steps · {scopedEvents.length} audit events</summary>
+        <div className="technical-grid">
+          <article className="technical-section" aria-labelledby="review-steps">
+            <div className="section-heading"><div><p className="section-kicker">Investigation activity</p><h4 id="review-steps">Investigation</h4></div><span className="count">{scopedSteps.length}</span></div>
+            <p className="technical-preview">{scopedSteps[0] ? `${scopedSteps[0].tool} · ${scopedSteps[0].target_resource} · ${scopedSteps[0].status}` : "No tool activity recorded"}</p>
+            <details><summary>View activity · {scopedSteps.length} steps</summary>{scopedSteps.length === 0 ? <p className="empty-state">No investigation steps are persisted for this run.</p> : <ul>{scopedSteps.map((step) => <li key={step.id}>{step.tool} · {step.target_resource} · <StatusBadge status={step.status} /></li>)}</ul>}</details>
           </article>
-
-          <article className="panel review-evidence" aria-labelledby="review-evidence">
-            <div className="panel-heading"><div><h4 id="review-evidence">Evidence</h4><small>Persisted ToolResult observations</small></div><span className="count">{scopedEvidence.length}</span></div>
-            {scopedEvidence.length === 0 ? <p className="empty-state">No persisted evidence is available for this investigation.</p> : (
-              scopedEvidence.map((item) => (
-                <article className="provenance-item" key={item.id}>
-                  <strong>#{item.id} · {item.source}</strong>
-                  <small>{item.resource}</small>
-                  <small>{formatTime(item.created_at)} · {displayStatus(item.origin)}</small>
-                  <details><summary>Observed payload</summary><pre>{JSON.stringify(item.payload, null, 2)}</pre></details>
-                </article>
-              ))
-            )}
+          <article className="technical-section" aria-labelledby="review-events">
+            <div className="section-heading"><div><p className="section-kicker">Audit events</p><h4 id="review-events">Operational timeline</h4></div><span className="count">{scopedEvents.length}</span></div>
+            <p className="technical-preview">{scopedEvents.length > 0 ? displayStatus(scopedEvents[scopedEvents.length - 1].event_type) : "No audit events recorded"}</p>
+            <details><summary>View audit timeline · {scopedEvents.length} events</summary>{scopedEvents.length === 0 ? <p className="empty-state">No audit events are persisted for this run.</p> : <ol className="timeline">{scopedEvents.map((event) => <li key={event.id}><span className={`timeline-marker ${toneFor(event.status ?? event.event_type)}`} /><div><strong>{eventLabel(event)} · {event.status ?? "recorded"}</strong><small>{displayStatus(event.event_type)} · {formatTime(event.timestamp)}</small></div>{event.status && <StatusBadge status={event.status} />}</li>)}</ol>}</details>
           </article>
-
-          <article className="panel review-steps" aria-labelledby="review-steps">
-          <div className="panel-heading"><div><h4 id="review-steps">Investigation</h4><small>Persisted tool activity</small></div><span className="count">{scopedSteps.length}</span></div>
-            {scopedSteps.length === 0 ? <p className="empty-state">No investigation steps are persisted for this run.</p> : (
-              <ul>{scopedSteps.map((step) => <li key={step.id}><span className="sr-only">{step.tool} · {step.target_resource} · {step.status}</span>{step.tool} · {step.target_resource} · <StatusBadge status={step.status} /></li>)}</ul>
-            )}
-          </article>
-
-          <article className="panel review-events" aria-labelledby="review-events">
-          <div className="panel-heading"><div><h4 id="review-events">Operational timeline</h4><small>Safe persisted audit events</small></div><span className="count">{scopedEvents.length}</span></div>
-            {scopedEvents.length === 0 ? <p className="empty-state">No audit events are persisted for this run.</p> : (
-              <ol className="timeline">
-                {scopedEvents.map((event) => (
-                  <li key={event.id}>
-                    <span className={`timeline-marker ${toneFor(event.status ?? event.event_type)}`} />
-                    <div><strong>{eventLabel(event)}</strong><small>{displayStatus(event.event_type)} · {formatTime(event.timestamp)}</small></div>
-                    {event.status && <StatusBadge status={event.status} />}
-                  </li>
-                ))}
-              </ol>
-            )}
-          </article>
-
-          {includeProposal && <article className="panel review-proposal" aria-labelledby="review-proposal">
-            <div className="panel-heading"><div><h4 id="review-proposal">Proposed Action</h4><small>Persisted proposal provenance</small></div><span className="count">{proposal ? "1" : "0"}</span></div>
-            {proposal ? (
-              <>
-                <p><b>Action:</b> {displayAction(proposal.action_type)}</p>
-                <p><b>Target:</b> {proposal.target}</p>
-                <p><b>Risk:</b> {proposal.risk_level}</p>
-                <p><b>Approval:</b> {displayStatus(proposal.approval_status)}</p>
-                <EvidenceReference label="Proposal evidence" ids={proposalEvidenceIds} evidence={scopedEvidence} />
-              </>
-            ) : <p className="empty-state">No action proposal was recorded for this investigation.</p>}
-          </article>}
         </div>
-      )}
+      </details>}
     </section>
   );
 }
