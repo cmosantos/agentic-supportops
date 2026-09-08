@@ -834,6 +834,8 @@ describe("Agentic SupportOps operator workflow", () => {
     expect(screen.getByText("Log growth rate is not available.")).toBeVisible();
     expect(screen.getByText(/Human action required/)).toBeVisible();
     expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith("/incidents/INC-001/investigate-ai"))).toBe(true);
+    expect(screen.getByRole("region", { name: "Current operational state" })).toHaveTextContent("Review findings");
+    expect(fetchMock.mock.calls.filter(([url, init]) => String(url).endsWith("/action-proposals") && init?.method === "POST")).toHaveLength(0);
     expect(screen.getByRole("radio", { name: /^AI Investigation/ })).toBeChecked();
   });
 
@@ -890,6 +892,8 @@ describe("Agentic SupportOps operator workflow", () => {
     expect(fetchMock.mock.calls.some(([url]) =>
       String(url).endsWith("/investigate-agent-sdk")
     )).toBe(true);
+    expect(screen.getByRole("region", { name: "Current operational state" })).toHaveTextContent("Review findings");
+    expect(fetchMock.mock.calls.filter(([url, init]) => String(url).endsWith("/action-proposals") && init?.method === "POST")).toHaveLength(0);
     expect(screen.getByRole("radio", { name: /^Agents SDK/ })).toBeChecked();
   });
 
@@ -1056,6 +1060,7 @@ describe("Agentic SupportOps operator workflow", () => {
     expect(proposal.getByText("Risk", { selector: "dt" }).closest("div")).toHaveTextContent("MEDIUM");
     expect(screen.getByRole("heading", { name: "Evidence supporting this proposal" }).parentElement).toHaveTextContent("#10");
     expect(screen.getByText("Approval state:").closest("p")).toHaveTextContent("pending");
+    expect(screen.getByRole("region", { name: "Current operational state" })).toHaveTextContent("Approve proposed action");
     expect(screen.getByRole("button", { name: "Approve" })).toBeVisible();
     expect(screen.getByRole("button", { name: "Reject" })).toBeVisible();
     expect(screen.queryByRole("button", { name: /execute/i })).not.toBeInTheDocument();

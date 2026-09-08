@@ -82,6 +82,7 @@ export function App() {
   const reviewRun = selectedRunId === null ? null : investigationRuns.find((run) => run.id === selectedRunId) ?? null;
   const reviewMode: InvestigationReviewMode | null = mode === "deterministic" ? "deterministic" : mode === "agents_sdk" ? "agents_sdk" : mode === "ai" ? "ai" : null;
   const deterministicEvidenceReadyForReview = mode === "deterministic" && evidence.length > 0 && !actionProposal;
+  const modelFindingsReadyForReview = (mode === "ai" || mode === "agents_sdk") && aiResult !== null && !actionProposal;
   const currentState = currentResolution?.decision === "resolve"
     ? "Incident resolved by human"
     : currentResolution?.decision === "keep_open"
@@ -133,9 +134,11 @@ export function App() {
                     ? "Execute approved action"
                     : deterministicEvidenceReadyForReview
                       ? "Review evidence"
-                    : evidence.length > 0 || aiResult
-                      ? "Review proposal"
-                      : "Run investigation";
+                      : modelFindingsReadyForReview
+                        ? "Review findings"
+                        : evidence.length > 0 || aiResult
+                          ? "Review proposal"
+                          : "Run investigation";
   const stateDescription = currentResolution
     ? "The final human decision is recorded for this incident."
     : outcomeVerification?.status === "verified"
