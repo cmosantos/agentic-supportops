@@ -81,6 +81,7 @@ export function App() {
   const { actionProposal, actionExecution, outcomeVerification, currentResolution } = workflow;
   const reviewRun = selectedRunId === null ? null : investigationRuns.find((run) => run.id === selectedRunId) ?? null;
   const reviewMode: InvestigationReviewMode | null = mode === "deterministic" ? "deterministic" : mode === "agents_sdk" ? "agents_sdk" : mode === "ai" ? "ai" : null;
+  const deterministicEvidenceReadyForReview = mode === "deterministic" && evidence.length > 0 && !actionProposal;
   const currentState = currentResolution?.decision === "resolve"
     ? "Incident resolved by human"
     : currentResolution?.decision === "keep_open"
@@ -130,6 +131,8 @@ export function App() {
                   ? "Approve proposed action"
                   : actionProposal?.approval_status === "approved"
                     ? "Execute approved action"
+                    : deterministicEvidenceReadyForReview
+                      ? "Review evidence"
                     : evidence.length > 0 || aiResult
                       ? "Review proposal"
                       : "Run investigation";
@@ -155,7 +158,9 @@ export function App() {
                       ? "The exact approved action is ready for explicit operator execution."
                       : aiResult
                         ? "The system synthesized the investigation findings from the evidence shown below."
-                        : "Start with a read-only investigation to collect grounded evidence.";
+                        : deterministicEvidenceReadyForReview
+                          ? "Grounded evidence has been collected and is ready for operator review."
+                          : "Start with a read-only investigation to collect grounded evidence.";
   const lifecycleSteps = selected ? [
     ["Incident", selected.status],
     ["Investigation", investigating ? "running" : aiMetadata?.status ?? (steps.length ? "recorded" : "not_loaded")],

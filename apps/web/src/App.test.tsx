@@ -381,7 +381,7 @@ describe("Deterministic investigation after model history", () => {
       evidence: legacy.evidence.map((item) => ({ ...item, investigation_id: run.id })),
       steps: legacy.steps.map((item) => ({ ...item, investigation_id: run.id })),
     };
-    installFetch({
+    const fetchMock = installFetch({
       incidentsOverride: [{ ...incidents[0], catalog_id: journey.catalog, title: journey.title }],
       post: async () => jsonResponse(response),
     });
@@ -394,6 +394,14 @@ describe("Deterministic investigation after model history", () => {
     expect(screen.getAllByText("#30")).toHaveLength(2);
     expect(screen.getByRole("region", { name: "Investigation history" })).toHaveTextContent("Deterministic");
     expect(screen.getByText(/This view shows the persisted playbook run, steps, and evidence/)).toBeVisible();
+    const currentState = screen.getByRole("region", { name: "Current operational state" });
+    expect(currentState).toHaveTextContent("Evidence collected");
+    expect(currentState).toHaveTextContent("Grounded evidence has been collected and is ready for operator review.");
+    expect(currentState).toHaveTextContent("Review evidence");
+    const lifecycle = screen.getByRole("region", { name: "Operational lifecycle" });
+    const proposalStage = within(lifecycle).getByText("Proposal").closest("li");
+    expect(proposalStage).toHaveTextContent("Not started");
+    expect(fetchMock.mock.calls.filter(([url, init]) => String(url).endsWith("/action-proposals") && init?.method === "POST")).toHaveLength(0);
   });
 
   it.each(deterministicJourneys.flatMap((journey) =>
