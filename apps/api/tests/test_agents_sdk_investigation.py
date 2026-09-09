@@ -245,6 +245,39 @@ def test_agent_definition_uses_strict_output_and_explicit_tools() -> None:
     assert output_schema.json_schema()["additionalProperties"] is False
 
 
+def test_orchestrator_instructions_define_resource_domain_boundaries() -> None:
+    agent = build_supportops_agent(
+        FakeAgentsModel(), InvestigationToolRegistry(), 2000, 60
+    )
+
+    assert isinstance(agent.instructions, str)
+    assert "`user_id` and user resources: delegate to Identity & Access Specialist." in agent.instructions
+    assert "`device_id` and workstation or endpoint resources: delegate to Endpoint & Network Specialist." in agent.instructions
+    assert "`host_id`, `application_id`, and host or application resources: delegate to Infrastructure & Application Specialist." in agent.instructions
+    assert "Do not reinterpret one identifier type as another." in agent.instructions
+    assert "Do not delegate Endpoint & Network Specialist merely because an application incident mentions latency or errors or includes a `host_id`." in agent.instructions
+    assert "Cross-domain delegation remains allowed only when the incident contains actual context or persisted evidence relevant to that specialist's domain." in agent.instructions
+    assert "Delegation instructions must preserve identifiers exactly as supplied." in agent.instructions
+    assert "Do not invent resource IDs, hostnames, service names, or other infrastructure facts." in agent.instructions
+
+
+def test_endpoint_specialist_instructions_reject_non_device_identifiers() -> None:
+    specialists = build_supportops_specialists(
+        FakeAgentsModel(), InvestigationToolRegistry(), 2000, 60
+    )
+    endpoint = next(
+        specialist
+        for specialist in specialists
+        if specialist.name == "Endpoint & Network Specialist"
+    )
+
+    assert isinstance(endpoint.instructions, str)
+    assert "Device-scoped tools require an actual `device_id` supplied by the incident or delegation." in endpoint.instructions
+    assert "Never reinterpret a `host_id` or `application_id` as a `device_id`." in endpoint.instructions
+    assert "Never invent a `hostname`, `service_name`, `resource_id`, or any other tool argument." in endpoint.instructions
+    assert "If the delegated request contains only host or application resources and no valid endpoint or device context, report that the request is outside the Endpoint & Network domain without calling tools." in endpoint.instructions
+
+
 def test_specialists_receive_only_registry_intersection_and_no_mutations() -> None:
     registry = InvestigationToolRegistry()
     specialists = build_supportops_specialists(FakeAgentsModel(), registry, 2000, 60)
