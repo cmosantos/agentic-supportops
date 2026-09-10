@@ -22,6 +22,7 @@ from domain.investigation import (
 )
 from integrations.responses_gateway import ResponsesProviderError
 from repositories.investigation_repository import InvestigationRepository
+from services.investigation_input import build_investigation_input
 from services.tool_registry import InvestigationToolRegistry
 from services.investigation_event_recorder import InvestigationEventRecorder
 from services.investigation_runtime_core import (
@@ -67,6 +68,8 @@ class AIInvestigationService:
         attributes = {
             "supportops.incident_reference": incident.catalog_id or str(incident.id),
             "supportops.runtime": InvestigationRuntime.MANUAL_RESPONSES.value,
+            "supportops.investigation.goal_driven": True,
+            "supportops.investigation.human_action_required": True,
         }
         if self._gateway is not None:
             attributes["supportops.model"] = self._gateway.model
@@ -98,7 +101,7 @@ class AIInvestigationService:
         last_response_id: str | None = None
         try:
             turn = self._model_turn(
-                events, 1, lambda: self._gateway.create_initial(self._incident_input(incident))
+                events, 1, lambda: self._gateway.create_initial(build_investigation_input(incident))
             )
             iterations = 1
             usage = self._add_usage(usage, turn.usage)
@@ -203,20 +206,6 @@ class AIInvestigationService:
                 )
             ],
         )
-
-    @staticmethod
-    def _incident_input(incident: IncidentRecord) -> str:
-        payload = {
-            "catalog_id": incident.catalog_id,
-            "title": incident.title,
-            "description": incident.description,
-            "category": incident.category,
-            "priority": incident.priority.value,
-            "affected_resource_type": incident.affected_resource_type,
-            "affected_resource_id": incident.affected_resource_id,
-            "investigation_context": incident.investigation_context,
-        }
-        return "Investigate this incident. Its title is a symptom label, not proof:\n" + json.dumps(payload)
 
     @staticmethod
     def _add_usage(current: ProviderUsage, added: ProviderUsage) -> ProviderUsage:

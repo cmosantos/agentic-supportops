@@ -1,4 +1,3 @@
-import json
 import openai
 from agents import Model, RunConfig, Runner
 from agents.exceptions import MaxTurnsExceeded, ModelBehaviorError, ModelTimeoutError
@@ -13,6 +12,7 @@ from integrations.agents_sdk_runtime import (
     build_supportops_agent,
 )
 from repositories.investigation_repository import InvestigationRepository
+from services.investigation_input import build_investigation_input
 from services.investigation_runtime_core import (
     AIInvestigationError,
     InvestigationRunSession,
@@ -57,6 +57,8 @@ class AgentsSDKInvestigationService:
                 "supportops.incident_reference": incident.catalog_id
                 or str(incident.id),
                 "supportops.runtime": InvestigationRuntime.AGENTS_SDK.value,
+                "supportops.investigation.goal_driven": True,
+                "supportops.investigation.human_action_required": True,
                 "supportops.model": self._model_name,
             },
         ) as span:
@@ -106,7 +108,7 @@ class AgentsSDKInvestigationService:
         try:
             result = Runner.run_sync(
                 agent,
-                self._incident_input(incident),
+                build_investigation_input(incident),
                 context=context,
                 max_turns=self._max_turns,
                 run_config=RunConfig(tracing_disabled=True),
@@ -259,17 +261,3 @@ class AgentsSDKInvestigationService:
         if cause is not None and cause is not error:
             return cls._find_tool_limit_error(cause)
         return None
-
-    @staticmethod
-    def _incident_input(incident: IncidentRecord) -> str:
-        payload = {
-            "catalog_id": incident.catalog_id,
-            "title": incident.title,
-            "description": incident.description,
-            "category": incident.category,
-            "priority": incident.priority.value,
-            "affected_resource_type": incident.affected_resource_type,
-            "affected_resource_id": incident.affected_resource_id,
-            "investigation_context": incident.investigation_context,
-        }
-        return "Investigate this incident. Its title is a symptom label, not proof:\n" + json.dumps(payload)

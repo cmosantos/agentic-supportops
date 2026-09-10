@@ -5,6 +5,17 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 
+class InvestigationGoal(BaseModel):
+    """Application-owned outcome and boundaries, not an investigation plan."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    objective: str = Field(min_length=1)
+    success_criteria: list[str] = Field(min_length=1)
+    constraints: list[str] = Field(min_length=1)
+    human_action_required: bool
+
+
 class ToolErrorCode(StrEnum):
     RESOURCE_NOT_FOUND = "resource_not_found"
     USER_NOT_FOUND = "user_not_found"

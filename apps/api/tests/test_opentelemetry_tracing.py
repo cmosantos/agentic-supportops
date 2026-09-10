@@ -93,6 +93,8 @@ def assert_investigation_hierarchy(
     assert len(investigations) == 1
     investigation = investigations[0]
     assert investigation.attributes["supportops.runtime"] == runtime
+    assert investigation.attributes["supportops.investigation.goal_driven"] is True
+    assert investigation.attributes["supportops.investigation.human_action_required"] is True
     trace_id = investigation.context.trace_id
     assert trace_id != 0
 

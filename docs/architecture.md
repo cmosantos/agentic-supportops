@@ -38,6 +38,25 @@ The UI launches deterministic and manual Responses API investigations. The Agent
 
 ## Execution paths
 
+### Application-owned investigation goal
+
+Both Responses and Agents SDK receive the same JSON input from
+`build_investigation_input(IncidentRecord)`, with separate `goal` and `incident`
+objects. The Pydantic `InvestigationGoal` defines the required outcome, success
+criteria, constraints, and human review requirement. The incident title remains
+a symptom label rather than evidence.
+
+The application owns the goal, constraints, policies, persisted evidence, and
+approval gates. The agent/runtime owns tool selection, delegation where supported,
+the investigation path, and synthesis within those boundaries. The goal prescribes
+no tool sequence and is not an LLM-generated plan. `InvestigationRuntimeCore` and
+existing policies remain authoritative; describing boundaries does not enforce or
+replace them. Investigation spans record only small goal-driven and human-review
+flags, not goal text.
+
+For this first slice, the goal is reconstructed deterministically for each run;
+it is not persisted or exposed in the frontend. No database migration is needed.
+
 ### Deterministic
 
 The incident category selects a declarative playbook. Steps resolve arguments from incident context and execute directly through the registry. Before starting, the repository replaces the prior deterministic Evidence/Steps materialized view for that incident. Successful observations become evidence; every outcome becomes an investigation step.
