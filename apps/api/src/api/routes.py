@@ -144,9 +144,12 @@ def investigate_incident(
     incident_id: str,
     session: DatabaseSession,
     tools: ControlledToolsDependency,
+    tracing: TraceBoundaryDependency,
 ) -> DeterministicInvestigationExecution:
     incident = _incident_or_404(incident_id, session)
-    service = InvestigationService(InvestigationRepository(session), tools)
+    service = InvestigationService(
+        InvestigationRepository(session, tracing), tools, tracing
+    )
     try:
         return service.investigate(incident)
     except ActiveInvestigationExistsError as error:

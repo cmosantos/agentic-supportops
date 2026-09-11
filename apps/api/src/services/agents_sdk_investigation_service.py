@@ -4,7 +4,12 @@ from agents.exceptions import MaxTurnsExceeded, ModelBehaviorError, ModelTimeout
 
 from db.models import IncidentRecord
 from domain.ai import AIInvestigationExecution, AIInvestigationRead, AIInvestigationResult, InvestigationRuntime, ProviderUsage
-from domain.investigation import EvidenceRead, InvestigationOrigin, InvestigationStepRead
+from domain.investigation import (
+    EvidenceRead,
+    InvestigationGoal,
+    InvestigationOrigin,
+    InvestigationStepRead,
+)
 from integrations.agents_sdk_runtime import (
     AgentsSDKRunContext,
     AgentsSDKToolLimitError,
@@ -15,6 +20,7 @@ from repositories.investigation_repository import InvestigationRepository
 from services.investigation_input import (
     build_investigation_goal,
     build_investigation_input,
+    investigation_goal_trace_attributes,
 )
 from services.investigation_runtime_core import (
     AIInvestigationError,
@@ -54,18 +60,18 @@ class AgentsSDKInvestigationService:
         self._tracing = tracing or TraceBoundary()
 
     def investigate(self, incident: IncidentRecord) -> AIInvestigationExecution:
+        goal = build_investigation_goal(incident)
         with self._tracing.span(
             "supportops.investigation",
             {
                 "supportops.incident_reference": incident.catalog_id
                 or str(incident.id),
                 "supportops.runtime": InvestigationRuntime.AGENTS_SDK.value,
-                "supportops.investigation.goal_driven": True,
-                "supportops.investigation.human_action_required": True,
+                **investigation_goal_trace_attributes(goal),
                 "supportops.model": self._model_name,
             },
         ) as span:
-            execution = self._investigate(incident)
+            execution = self._investigate(incident, goal)
             span.set_attribute(
                 "supportops.investigation_id", execution.investigation.id
             )
@@ -75,10 +81,11 @@ class AgentsSDKInvestigationService:
             )
             return execution
 
-    def _investigate(self, incident: IncidentRecord) -> AIInvestigationExecution:
+    def _investigate(
+        self, incident: IncidentRecord, goal: InvestigationGoal
+    ) -> AIInvestigationExecution:
         if self._model is None:
             raise AIInvestigationError("ai_not_configured", "OpenAI is not configured")
-        goal = build_investigation_goal()
         investigation_input = build_investigation_input(incident, goal)
         session = InvestigationRunSession.start(
             self._repository,

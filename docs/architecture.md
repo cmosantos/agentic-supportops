@@ -20,7 +20,8 @@ flowchart LR
     Services -. diagnostic spans .-> Telemetry[OpenTelemetry boundary]
 ```
 
-The UI launches deterministic and manual Responses API investigations. The Agents SDK runtime and historical run/event APIs are available through FastAPI but lack dedicated frontend screens.
+The UI launches deterministic, manual Responses API, and Agents SDK investigations
+and presents their persisted run history and review artifacts.
 
 ## Component responsibilities
 
@@ -40,7 +41,8 @@ The UI launches deterministic and manual Responses API investigations. The Agent
 
 ### Application-owned investigation goal
 
-Both Responses and Agents SDK receive the same JSON input from
+All three runtimes build the same application-owned `InvestigationGoal` from the
+incident category. Responses and Agents SDK receive the same JSON input from
 `build_investigation_input(IncidentRecord, InvestigationGoal)`, with separate
 `goal` and `incident` objects. The Pydantic `InvestigationGoal` defines the required outcome, success
 criteria, constraints, and human review requirement. The incident title remains
@@ -51,20 +53,26 @@ approval gates. The agent/runtime owns tool selection, delegation where supporte
 the investigation path, and synthesis within those boundaries. The goal prescribes
 no tool sequence and is not an LLM-generated plan. `InvestigationRuntimeCore` and
 existing policies remain authoritative; describing boundaries does not enforce or
-replace them. Model-guided runs persist the exact application-owned goal as
-immutable run audit metadata when the run is created, before provider interaction.
+replace them. Every new run persists the exact application-owned goal as immutable
+run audit metadata when the run is created, before tool or provider interaction.
 The snapshot is not an execution plan and contains no prompt, provider payload,
-scratchpad, hidden reasoning, or chain of thought. Legacy and deterministic records
-may have no goal snapshot. `InvestigationRuntimeCore` and policies remain the
+scratchpad, hidden reasoning, or chain of thought. Legacy records may have no goal
+snapshot. `InvestigationRuntimeCore` and policies remain the
 authoritative enforcement boundaries. Investigation spans record only small
-goal-driven and human-review flags, not goal text. Frontend presentation of the
-snapshot is intentionally deferred to a later slice.
+goal-driven and human-review flags plus a short fingerprint that can be correlated
+with the persisted snapshot; they do not record goal text. The review UI presents
+the persisted contract as read-only run governance for any runtime that has one.
 
 ### Deterministic
 
-The incident category selects a declarative playbook. Steps resolve arguments from incident context and execute directly through the registry. Before starting, the repository replaces the prior deterministic Evidence/Steps materialized view for that incident. Successful observations become evidence; every outcome becomes an investigation step.
+The incident `catalog_id` selects a declarative playbook. The category-derived goal
+states the bounded question, while the playbook remains the only authority over
+tool selection and order. Steps resolve arguments from incident context and execute
+directly through the registry. Successful observations become evidence; every
+outcome becomes an investigation step.
 
-Deterministic investigations do not create model-guided run records or model-turn events.
+Deterministic investigations create the same persisted run envelope and goal
+snapshot, but do not create a model assessment or model-turn events.
 
 ### Manual Responses API
 

@@ -28,7 +28,9 @@ def test_inc_019_distinguishes_connectivity_from_dns(seeded_client: TestClient) 
     body = seeded_client.post("/incidents/INC-019/investigate").json()
     assert evidence_by_source(body, "check_external_connectivity")["external_reachable"] is True
     assert evidence_by_source(body, "check_dns_resolution")["resolved"] is False
-    assert body["investigation"]["goal_snapshot"] is None
+    goal = body["investigation"]["goal_snapshot"]
+    assert "network configuration, gateway and external connectivity, or DNS" in goal["objective"]
+    assert goal["human_action_required"] is True
 
 
 def test_inc_021_collects_high_cpu_and_alerts(seeded_client: TestClient) -> None:

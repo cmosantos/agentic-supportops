@@ -17,6 +17,7 @@ from domain.ai import (
 )
 from domain.investigation import (
     EvidenceRead,
+    InvestigationGoal,
     InvestigationOrigin,
     InvestigationStepRead,
 )
@@ -25,6 +26,7 @@ from repositories.investigation_repository import InvestigationRepository
 from services.investigation_input import (
     build_investigation_goal,
     build_investigation_input,
+    investigation_goal_trace_attributes,
 )
 from services.tool_registry import InvestigationToolRegistry
 from services.investigation_event_recorder import InvestigationEventRecorder
@@ -68,17 +70,17 @@ class AIInvestigationService:
         self._tracing = tracing or TraceBoundary()
 
     def investigate(self, incident: IncidentRecord) -> AIInvestigationExecution:
+        goal = build_investigation_goal(incident)
         attributes = {
             "supportops.incident_reference": incident.catalog_id or str(incident.id),
             "supportops.runtime": InvestigationRuntime.MANUAL_RESPONSES.value,
-            "supportops.investigation.goal_driven": True,
-            "supportops.investigation.human_action_required": True,
+            **investigation_goal_trace_attributes(goal),
         }
         if self._gateway is not None:
             attributes["supportops.model"] = self._gateway.model
         attributes["supportops.tool.transport"] = self._tools.transport
         with self._tracing.span("supportops.investigation", attributes) as span:
-            execution = self._investigate(incident)
+            execution = self._investigate(incident, goal)
             span.set_attribute(
                 "supportops.investigation_id", execution.investigation.id
             )
@@ -88,10 +90,11 @@ class AIInvestigationService:
             )
             return execution
 
-    def _investigate(self, incident: IncidentRecord) -> AIInvestigationExecution:
+    def _investigate(
+        self, incident: IncidentRecord, goal: InvestigationGoal
+    ) -> AIInvestigationExecution:
         if self._gateway is None:
             raise AIInvestigationError("ai_not_configured", "OpenAI is not configured")
-        goal = build_investigation_goal()
         investigation_input = build_investigation_input(incident, goal)
         session = InvestigationRunSession.start(
             self._repository,

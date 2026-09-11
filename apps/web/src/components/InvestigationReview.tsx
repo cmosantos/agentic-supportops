@@ -193,7 +193,7 @@ export function InvestigationReview({ mode, run, status, result, evidence, steps
         </> : <p className="empty-state">No action proposal was recorded for this investigation.</p>}
       </aside>}
 
-      {mode !== "deterministic" && run?.goal_snapshot && (
+      {run?.goal_snapshot && (
         <InvestigationContract goal={run.goal_snapshot} runId={run.id} />
       )}
 

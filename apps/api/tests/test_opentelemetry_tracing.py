@@ -95,6 +95,7 @@ def assert_investigation_hierarchy(
     assert investigation.attributes["supportops.runtime"] == runtime
     assert investigation.attributes["supportops.investigation.goal_driven"] is True
     assert investigation.attributes["supportops.investigation.human_action_required"] is True
+    assert len(investigation.attributes["supportops.investigation.goal_fingerprint"]) == 16
     trace_id = investigation.context.trace_id
     assert trace_id != 0
 
@@ -175,6 +176,28 @@ def test_manual_runtime_exports_correlated_parent_child_spans(
         for span in span_by_name(exporter, "supportops.tool.execute")
     }
     assert completed["metadata"]["span_id"] in tool_span_ids
+
+
+def test_deterministic_runtime_traces_persisted_goal_without_model_spans(
+    seeded_client: TestClient,
+) -> None:
+    boundary, exporter = enabled_boundary()
+    with_boundary(boundary)
+    try:
+        response = seeded_client.post("/incidents/INC-019/investigate")
+    finally:
+        clear_boundary()
+        boundary.shutdown()
+
+    assert response.status_code == 200
+    goal = response.json()["investigation"]["goal_snapshot"]
+    investigation = span_by_name(exporter, "supportops.investigation")
+    assert len(investigation) == 1
+    assert investigation[0].attributes["supportops.runtime"] == "deterministic"
+    assert investigation[0].attributes["supportops.investigation.goal_driven"] is True
+    assert len(investigation[0].attributes["supportops.investigation.goal_fingerprint"]) == 16
+    assert goal["human_action_required"] is True
+    assert span_by_name(exporter, "supportops.model.turn") == []
 
 
 def test_agents_sdk_exports_same_local_hierarchy_without_sdk_tracing(

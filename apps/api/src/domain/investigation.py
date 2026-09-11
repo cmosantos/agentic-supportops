@@ -5,6 +5,13 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 
+class GoalProfile(StrEnum):
+    ROOT_CAUSE = "root_cause"
+    ACCOUNT_LOCK_STATE = "account_lock_state"
+    APPLICATION_AVAILABILITY = "application_availability"
+    EVIDENCE_SUFFICIENCY = "evidence_sufficiency"
+
+
 class InvestigationGoal(BaseModel):
     """Application-owned outcome and boundaries, not an investigation plan."""
 

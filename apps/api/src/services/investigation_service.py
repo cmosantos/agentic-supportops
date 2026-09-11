@@ -5,7 +5,12 @@ from domain.ai import (
     ProviderUsage,
 )
 from domain.investigation import EvidenceRead, InvestigationRead, InvestigationStepRead
+from observability.tracing import TraceBoundary
 from repositories.investigation_repository import InvestigationRepository
+from services.investigation_input import (
+    build_investigation_goal,
+    investigation_goal_trace_attributes,
+)
 from services.playbooks import PLAYBOOKS
 from services.tool_registry import InvestigationToolRegistry
 
@@ -23,9 +28,11 @@ class InvestigationService:
         self,
         repository: InvestigationRepository,
         tools: InvestigationToolRegistry | None = None,
+        tracing: TraceBoundary | None = None,
     ) -> None:
         self._repository = repository
         self._tools = tools or InvestigationToolRegistry()
+        self._tracing = tracing or TraceBoundary()
 
     def investigate(self, incident: IncidentRecord) -> DeterministicInvestigationExecution:
         playbook = PLAYBOOKS.get(incident.catalog_id or "")
@@ -37,27 +44,43 @@ class InvestigationService:
             (step, self._resolve_arguments(step.arguments, incident.investigation_context))
             for step in playbook
         ]
-        run = self._repository.start_ai_run(
-            incident.id, model="deterministic-playbook", mode="deterministic"
-        )
-        try:
-            for step, arguments in resolved_playbook:
-                result = self._tools.execute(step.tool, arguments)
-                self._repository.record_result(
-                    incident.id,
-                    result,
-                    arguments=arguments,
-                    investigation_id=run.id,
-                )
-            run = self._repository.complete_deterministic_run(run)
-        except Exception as error:
-            self._repository.fail_ai_run(
-                run,
-                "deterministic_investigation_failed",
-                str(error),
-                usage=ProviderUsage(runtime="deterministic"),
+        goal = build_investigation_goal(incident)
+        attributes = {
+            "supportops.incident_reference": incident.catalog_id or str(incident.id),
+            "supportops.runtime": "deterministic",
+            "supportops.tool.transport": self._tools.transport,
+            **investigation_goal_trace_attributes(goal),
+        }
+        with self._tracing.span("supportops.investigation", attributes) as span:
+            run = self._repository.start_ai_run(
+                incident.id,
+                model="deterministic-playbook",
+                mode="deterministic",
+                goal_snapshot=goal,
             )
-            raise
+            try:
+                for step, arguments in resolved_playbook:
+                    result = self._tools.execute(step.tool, arguments)
+                    self._repository.record_result(
+                        incident.id,
+                        result,
+                        arguments=arguments,
+                        investigation_id=run.id,
+                    )
+                run = self._repository.complete_deterministic_run(run)
+            except Exception as error:
+                self._repository.fail_ai_run(
+                    run,
+                    "deterministic_investigation_failed",
+                    str(error),
+                    usage=ProviderUsage(runtime="deterministic"),
+                )
+                raise
+            span.set_attribute("supportops.investigation_id", run.id)
+            span.set_attribute(
+                "supportops.investigation.status",
+                run.status.value,
+            )
         return DeterministicInvestigationExecution(
             investigation=AIInvestigationRead.model_validate(run),
             incident_id=incident.id,

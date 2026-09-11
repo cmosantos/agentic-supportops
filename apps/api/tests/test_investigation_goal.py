@@ -6,11 +6,12 @@ from pydantic import ValidationError
 
 from db.models import IncidentRecord
 from domain.incident import IncidentPriority
-from domain.investigation import InvestigationGoal
+from domain.investigation import GoalProfile, InvestigationGoal
 from services import ai_investigation_service, agents_sdk_investigation_service
 from services.investigation_input import (
     build_investigation_goal,
     build_investigation_input,
+    investigation_goal_fingerprint,
 )
 from tests.fakes import FakeResponsesGateway, final_turn
 from tests.test_ai_investigation import run_with_fake as run_manual
@@ -80,6 +81,85 @@ def test_goal_describes_evidence_and_safety_boundaries(incident):
     assert goal.human_action_required is True
 
 
+def test_goal_objective_is_incident_aware_without_treating_title_as_evidence(incident):
+    network_goal = build_investigation_goal(incident)
+    incident.category = "identity"
+    incident.affected_resource_type = "user"
+    identity_goal = build_investigation_goal(incident)
+
+    assert "network configuration, gateway and external connectivity, or DNS" in network_goal.objective
+    assert "account, access, license, mailbox, or mailbox permissions" in identity_goal.objective
+    assert network_goal.objective != identity_goal.objective
+    assert "DNS failure alleged" not in network_goal.objective
+    assert network_goal.constraints == identity_goal.constraints
+    assert network_goal.success_criteria == identity_goal.success_criteria
+
+
+@pytest.mark.parametrize(
+    ("profile", "expected_objective"),
+    [
+        (
+            GoalProfile.ROOT_CAUSE,
+            "network configuration, gateway and external connectivity, or DNS",
+        ),
+        (GoalProfile.ACCOUNT_LOCK_STATE, "whether the affected user account is locked"),
+        (
+            GoalProfile.APPLICATION_AVAILABILITY,
+            "whether the affected application is available",
+        ),
+        (
+            GoalProfile.EVIDENCE_SUFFICIENCY,
+            "whether the persisted diagnostic evidence is sufficient",
+        ),
+    ],
+)
+def test_each_goal_profile_builds_a_stable_contract(
+    incident, profile, expected_objective
+):
+    first = build_investigation_goal(incident, profile)
+    second = build_investigation_goal(incident, profile)
+
+    assert first == second
+    assert expected_objective in first.objective
+    assert InvestigationGoal.model_validate(first.model_dump()) == first
+
+
+def test_goal_profiles_have_semantically_distinct_objectives(incident):
+    objectives = {
+        build_investigation_goal(incident, profile).objective
+        for profile in GoalProfile
+    }
+
+    assert len(objectives) == len(GoalProfile)
+
+
+def test_invalid_goal_profile_is_not_silently_accepted(incident):
+    with pytest.raises(TypeError, match="GoalProfile"):
+        build_investigation_goal(incident, "root_cause")
+    with pytest.raises(ValueError):
+        GoalProfile("arbitrary_goal")
+
+
+def test_default_goal_profile_preserves_contextual_root_cause_behavior(incident):
+    default = build_investigation_goal(incident)
+    explicit = build_investigation_goal(incident, GoalProfile.ROOT_CAUSE)
+
+    assert default == explicit
+    assert "network configuration, gateway and external connectivity, or DNS" in default.objective
+
+
+def test_goal_fingerprint_is_stable_and_changes_with_the_contract(incident):
+    original = build_investigation_goal(incident)
+    changed = original.model_copy(update={"objective": "A different bounded objective"})
+
+    assert investigation_goal_fingerprint(original) == investigation_goal_fingerprint(
+        original.model_copy(deep=True)
+    )
+    assert investigation_goal_fingerprint(original) != investigation_goal_fingerprint(
+        changed
+    )
+
+
 def test_both_runtimes_call_shared_builder_and_deliver_same_payload(seeded_client, monkeypatch):
     assert ai_investigation_service.build_investigation_goal is build_investigation_goal
     assert agents_sdk_investigation_service.build_investigation_goal is build_investigation_goal
@@ -88,13 +168,13 @@ def test_both_runtimes_call_shared_builder_and_deliver_same_payload(seeded_clien
     manual_goals = []
     sdk_goals = []
 
-    def build_manual_goal():
-        goal = build_investigation_goal()
+    def build_manual_goal(incident):
+        goal = build_investigation_goal(incident)
         manual_goals.append(goal)
         return goal
 
-    def build_sdk_goal():
-        goal = build_investigation_goal()
+    def build_sdk_goal(incident):
+        goal = build_investigation_goal(incident)
         sdk_goals.append(goal)
         return goal
 
@@ -112,12 +192,16 @@ def test_both_runtimes_call_shared_builder_and_deliver_same_payload(seeded_clien
     sdk = run_sdk(seeded_client, model)
     assert manual.status_code == 200, manual.text
     assert sdk.status_code == 200, sdk.text
-    manual_goal_builder.assert_called_once_with()
-    sdk_goal_builder.assert_called_once_with()
+    manual_goal_builder.assert_called_once_with(manual_builder.call_args.args[0])
+    sdk_goal_builder.assert_called_once_with(sdk_builder.call_args.args[0])
     manual_builder.assert_called_once()
     sdk_builder.assert_called_once()
     assert manual_builder.call_args.args[1] is manual_goals[0]
     assert sdk_builder.call_args.args[1] is sdk_goals[0]
+    assert isinstance(manual_builder.call_args.args[1], InvestigationGoal)
+    assert isinstance(sdk_builder.call_args.args[1], InvestigationGoal)
+    assert manual_goal_builder.call_args.args == (manual_builder.call_args.args[0],)
+    assert sdk_goal_builder.call_args.args == (sdk_builder.call_args.args[0],)
     expected = build_investigation_input(
         manual_builder.call_args.args[0], manual_goals[0]
     )
@@ -170,7 +254,8 @@ def test_historical_goal_snapshot_is_not_reconstructed_or_changed(
     original = build_investigation_goal()
     goal_a = original.model_copy(update={"objective": "Historical objective A"})
     goal_b = original.model_copy(update={"objective": "Later objective B"})
-    goal_builder = Mock(side_effect=[goal_a, goal_b])
+    goals = iter([goal_a, goal_b])
+    goal_builder = Mock(side_effect=lambda _incident: next(goals))
     monkeypatch.setattr(ai_investigation_service, "build_investigation_goal", goal_builder)
 
     first = run_manual(
