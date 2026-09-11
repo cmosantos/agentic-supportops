@@ -4,7 +4,12 @@ from domain.ai import (
     DeterministicInvestigationExecution,
     ProviderUsage,
 )
-from domain.investigation import EvidenceRead, InvestigationRead, InvestigationStepRead
+from domain.investigation import (
+    EvidenceRead,
+    InvestigationGoal,
+    InvestigationRead,
+    InvestigationStepRead,
+)
 from observability.tracing import TraceBoundary
 from repositories.investigation_repository import InvestigationRepository
 from services.investigation_input import (
@@ -34,7 +39,11 @@ class InvestigationService:
         self._tools = tools or InvestigationToolRegistry()
         self._tracing = tracing or TraceBoundary()
 
-    def investigate(self, incident: IncidentRecord) -> DeterministicInvestigationExecution:
+    def investigate(
+        self,
+        incident: IncidentRecord,
+        goal: InvestigationGoal | None = None,
+    ) -> DeterministicInvestigationExecution:
         playbook = PLAYBOOKS.get(incident.catalog_id or "")
         if playbook is None:
             raise UnsupportedInvestigationError(
@@ -44,7 +53,8 @@ class InvestigationService:
             (step, self._resolve_arguments(step.arguments, incident.investigation_context))
             for step in playbook
         ]
-        goal = build_investigation_goal(incident)
+        if goal is None:
+            goal = build_investigation_goal(incident)
         attributes = {
             "supportops.incident_reference": incident.catalog_id or str(incident.id),
             "supportops.runtime": "deterministic",

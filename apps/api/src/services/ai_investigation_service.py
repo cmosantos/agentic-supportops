@@ -69,8 +69,13 @@ class AIInvestigationService:
         self._max_identical_tool_calls = max_identical_tool_calls
         self._tracing = tracing or TraceBoundary()
 
-    def investigate(self, incident: IncidentRecord) -> AIInvestigationExecution:
-        goal = build_investigation_goal(incident)
+    def investigate(
+        self,
+        incident: IncidentRecord,
+        goal: InvestigationGoal | None = None,
+    ) -> AIInvestigationExecution:
+        if goal is None:
+            goal = build_investigation_goal(incident)
         attributes = {
             "supportops.incident_reference": incident.catalog_id or str(incident.id),
             "supportops.runtime": InvestigationRuntime.MANUAL_RESPONSES.value,

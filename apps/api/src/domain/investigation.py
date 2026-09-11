@@ -12,6 +12,14 @@ class GoalProfile(StrEnum):
     EVIDENCE_SUFFICIENCY = "evidence_sufficiency"
 
 
+class InvestigationRequest(BaseModel):
+    """Client-selectable investigation intent; goal contents remain application-owned."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    goal_profile: GoalProfile | None = None
+
+
 class InvestigationGoal(BaseModel):
     """Application-owned outcome and boundaries, not an investigation plan."""
 

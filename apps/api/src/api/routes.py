@@ -11,8 +11,10 @@ from db.models import IncidentRecord
 from domain.incident import IncidentCreate, IncidentRead
 from domain.investigation import (
     EvidenceRead,
+    InvestigationGoal,
     InvestigationOrigin,
     InvestigationRead,
+    InvestigationRequest,
     InvestigationStepRead,
 )
 from domain.action_proposal import (
@@ -101,6 +103,7 @@ from services.investigation_service import (
     InvestigationService,
     UnsupportedInvestigationError,
 )
+from services.investigation_input import build_investigation_goal
 from observability.tracing import TraceBoundary
 
 router = APIRouter()
@@ -145,13 +148,15 @@ def investigate_incident(
     session: DatabaseSession,
     tools: ControlledToolsDependency,
     tracing: TraceBoundaryDependency,
+    payload: InvestigationRequest | None = None,
 ) -> DeterministicInvestigationExecution:
     incident = _incident_or_404(incident_id, session)
+    goal = _resolve_requested_goal(incident, payload)
     service = InvestigationService(
         InvestigationRepository(session, tracing), tools, tracing
     )
     try:
-        return service.investigate(incident)
+        return service.investigate(incident, goal)
     except ActiveInvestigationExistsError as error:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -189,8 +194,10 @@ def investigate_incident_with_ai(
     session: DatabaseSession,
     gateway: ResponsesClientDependency,
     tracing: TraceBoundaryDependency,
+    payload: InvestigationRequest | None = None,
 ) -> AIInvestigationExecution:
     incident = _incident_or_404(incident_id, session)
+    goal = _resolve_requested_goal(incident, payload)
     if gateway is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -213,7 +220,7 @@ def investigate_incident_with_ai(
         },
     ):
         try:
-            return service.investigate(incident)
+            return service.investigate(incident, goal)
         except ActiveInvestigationExistsError as error:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -257,8 +264,10 @@ def investigate_incident_with_agents_sdk(
     session: DatabaseSession,
     model: AgentsSDKModelDependency,
     tracing: TraceBoundaryDependency,
+    payload: InvestigationRequest | None = None,
 ) -> AIInvestigationExecution:
     incident = _incident_or_404(incident_id, session)
+    goal = _resolve_requested_goal(incident, payload)
     if model is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -273,7 +282,7 @@ def investigate_incident_with_agents_sdk(
         },
     ):
         try:
-            return service.investigate(incident)
+            return service.investigate(incident, goal)
         except ActiveInvestigationExistsError as error:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -887,6 +896,15 @@ def _agents_sdk_service(
 
 def _investigation_tools() -> InvestigationToolRegistry:
     return build_investigation_tools(settings)
+
+
+def _resolve_requested_goal(
+    incident: IncidentRecord,
+    payload: InvestigationRequest | None,
+) -> InvestigationGoal | None:
+    if payload is None or payload.goal_profile is None:
+        return None
+    return build_investigation_goal(incident, payload.goal_profile)
 
 
 def _incident_or_404(incident_id: str, session: Session) -> IncidentRecord:
