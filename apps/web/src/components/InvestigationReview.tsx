@@ -3,6 +3,7 @@ import type {
   AIResult,
   Evidence,
   InvestigationEvent,
+  InvestigationGoal,
   InvestigationRun,
   InvestigationStep,
 } from "../types/supportOps";
@@ -63,6 +64,35 @@ function EvidenceReference({ label, ids, evidence }: { label: string; ids: numbe
       <b>{label}:</b>{" "}
       {ids.map((id) => <span className={persisted.has(id) ? "provenance-id" : "provenance-id missing"} key={id}>#{id}{persisted.has(id) ? "" : " · unavailable in this run"}</span>)}
     </p>
+  );
+}
+
+function InvestigationContract({ goal, runId }: { goal: InvestigationGoal; runId: number }) {
+  return (
+    <details className="technical-details investigation-contract">
+      <summary>Investigation Contract</summary>
+      <p className="contract-context">
+        This application-owned contract governed historical investigation run #{runId}. It is read-only audit metadata.
+      </p>
+      <dl className="contract-fields">
+        <div className="contract-objective">
+          <dt>Objective</dt>
+          <dd>{goal.objective}</dd>
+        </div>
+        <div>
+          <dt>Success Criteria</dt>
+          <dd><ul>{goal.success_criteria.map((item, index) => <li key={`${index}-${item}`}>{item}</li>)}</ul></dd>
+        </div>
+        <div>
+          <dt>Constraints</dt>
+          <dd><ul>{goal.constraints.map((item, index) => <li key={`${index}-${item}`}>{item}</li>)}</ul></dd>
+        </div>
+        <div className={goal.human_action_required ? "contract-approval required" : "contract-approval"}>
+          <dt>Human Approval Required</dt>
+          <dd>{goal.human_action_required ? "Yes" : "No"}</dd>
+        </div>
+      </dl>
+    </details>
   );
 }
 
@@ -162,6 +192,10 @@ export function InvestigationReview({ mode, run, status, result, evidence, steps
           <EvidenceReference label="Proposal evidence" ids={proposalEvidenceIds} evidence={scopedEvidence} />
         </> : <p className="empty-state">No action proposal was recorded for this investigation.</p>}
       </aside>}
+
+      {mode !== "deterministic" && run?.goal_snapshot && (
+        <InvestigationContract goal={run.goal_snapshot} runId={run.id} />
+      )}
 
       {mode && <details className="technical-details">
         <summary>Technical details · {scopedSteps.length} activity steps · {scopedEvents.length} audit events</summary>

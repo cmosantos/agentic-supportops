@@ -48,6 +48,19 @@ const deterministicEvidence = {
   created_at: "2026-08-28T12:10:00Z",
 };
 
+const persistedGoalSnapshot = {
+  objective: "Determine the incident cause from persisted evidence.",
+  success_criteria: [
+    "Ground the diagnosis in persisted tool evidence.",
+    "Report missing or conflicting evidence.",
+  ],
+  constraints: [
+    "Use only read-only investigation tools.",
+    "Do not treat remediation as executed.",
+  ],
+  human_action_required: true,
+};
+
 const actionableExecution = {
   investigation: {
     id: 20,
@@ -56,6 +69,7 @@ const actionableExecution = {
     status: "completed",
     model: "gpt-test",
     response_id: "response-test",
+    goal_snapshot: persistedGoalSnapshot,
     result: {
       status: "completed",
       summary: "Disk pressure confirmed.",
@@ -596,6 +610,75 @@ describe("Agentic SupportOps operator workflow", () => {
     expect(within(dialog).getByRole("radio", { name: /^AI/ })).toBeDisabled();
     expect(within(dialog).getByRole("radio", { name: /^Agents SDK/ })).toBeDisabled();
     expect(within(dialog).getByRole("radio", { name: /^Deterministic/ })).toBeEnabled();
+  });
+
+  it("renders the persisted investigation contract as secondary run governance", async () => {
+    const execution = {
+      ...actionableExecution,
+      investigation: {
+        ...actionableExecution.investigation,
+        result: { ...actionableExecution.investigation.result, proposed_action: null },
+      },
+    };
+    installFetch({
+      aiConfigured: true,
+      post: async (url) => url.endsWith("/investigate-ai")
+        ? jsonResponse(execution)
+        : Promise.reject(new Error(`Unexpected request: ${url}`)),
+    });
+    render(<App />);
+
+    await selectIncident();
+    await runInvestigation("ai");
+
+    expect(await screen.findByText("Disk pressure confirmed.")).toBeVisible();
+    const summary = screen.getByText("Investigation Contract");
+    const contract = summary.closest("details");
+    expect(summary).toBeVisible();
+    expect(contract).not.toBeNull();
+    expect(contract).not.toHaveAttribute("open");
+
+    await userEvent.click(summary);
+
+    const contractView = within(contract as HTMLElement);
+    expect(contractView.getByText(/application-owned contract governed historical investigation run #20/i)).toBeVisible();
+    expect(contractView.getByText("Objective")).toBeVisible();
+    expect(contractView.getByText(persistedGoalSnapshot.objective)).toBeVisible();
+    expect(contractView.getByText("Success Criteria")).toBeVisible();
+    expect(contractView.getByText(persistedGoalSnapshot.success_criteria[0])).toBeVisible();
+    expect(contractView.getByText("Constraints")).toBeVisible();
+    expect(contractView.getByText(persistedGoalSnapshot.constraints[0])).toBeVisible();
+    expect(contractView.getByText("Human Approval Required")).toBeVisible();
+    expect(contractView.getByText("Yes")).toBeVisible();
+    expect(screen.getByRole("region", { name: "Current operational state" })).toHaveTextContent("Review findings");
+    expect(screen.getByRole("button", { name: "Run investigation" })).toBeEnabled();
+  });
+
+  it("does not fabricate an investigation contract for a legacy null snapshot", async () => {
+    const legacyExecution = {
+      ...actionableExecution,
+      investigation: {
+        ...actionableExecution.investigation,
+        goal_snapshot: null,
+        result: { ...actionableExecution.investigation.result, proposed_action: null },
+      },
+    };
+    installFetch({
+      aiConfigured: true,
+      post: async (url) => url.endsWith("/investigate-ai")
+        ? jsonResponse(legacyExecution)
+        : Promise.reject(new Error(`Unexpected request: ${url}`)),
+    });
+    render(<App />);
+
+    await selectIncident();
+    await runInvestigation("ai");
+
+    expect(await screen.findByText("Disk pressure confirmed.")).toBeVisible();
+    expect(screen.queryByText("Investigation Contract")).not.toBeInTheDocument();
+    expect(screen.queryByText(persistedGoalSnapshot.objective)).not.toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Current operational state" })).toHaveTextContent("Review findings");
+    expect(screen.getByRole("button", { name: "Run investigation" })).toBeEnabled();
   });
 
   it("keeps unavailable AI runtimes visible in the active runtime selector", async () => {

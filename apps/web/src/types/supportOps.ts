@@ -39,6 +39,12 @@ export type InvestigationStep = {
   completed_at: string | null;
 };
 export type AIStatus = "running" | "completed" | "insufficient_evidence" | "failed";
+export type InvestigationGoal = {
+  objective: string;
+  success_criteria: string[];
+  constraints: string[];
+  human_action_required: boolean;
+};
 export type AIResult = {
   status: AIStatus;
   summary: string;
@@ -173,6 +179,7 @@ export type AIExecution = {
     status: AIStatus;
     model: string;
     response_id: string | null;
+    goal_snapshot: InvestigationGoal | null;
     result: AIResult | null;
     usage: {
       input_tokens: number;
