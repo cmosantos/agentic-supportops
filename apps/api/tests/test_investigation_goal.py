@@ -8,7 +8,10 @@ from db.models import IncidentRecord
 from domain.incident import IncidentPriority
 from domain.investigation import InvestigationGoal
 from services import ai_investigation_service, agents_sdk_investigation_service
-from services.investigation_input import build_investigation_input
+from services.investigation_input import (
+    build_investigation_goal,
+    build_investigation_input,
+)
 from tests.fakes import FakeResponsesGateway, final_turn
 from tests.test_ai_investigation import run_with_fake as run_manual
 from tests.test_agents_sdk_investigation import (
@@ -78,10 +81,29 @@ def test_goal_describes_evidence_and_safety_boundaries(incident):
 
 
 def test_both_runtimes_call_shared_builder_and_deliver_same_payload(seeded_client, monkeypatch):
+    assert ai_investigation_service.build_investigation_goal is build_investigation_goal
+    assert agents_sdk_investigation_service.build_investigation_goal is build_investigation_goal
     assert ai_investigation_service.build_investigation_input is build_investigation_input
     assert agents_sdk_investigation_service.build_investigation_input is build_investigation_input
+    manual_goals = []
+    sdk_goals = []
+
+    def build_manual_goal():
+        goal = build_investigation_goal()
+        manual_goals.append(goal)
+        return goal
+
+    def build_sdk_goal():
+        goal = build_investigation_goal()
+        sdk_goals.append(goal)
+        return goal
+
+    manual_goal_builder = Mock(side_effect=build_manual_goal)
+    sdk_goal_builder = Mock(side_effect=build_sdk_goal)
     manual_builder = Mock(wraps=build_investigation_input)
     sdk_builder = Mock(wraps=build_investigation_input)
+    monkeypatch.setattr(ai_investigation_service, "build_investigation_goal", manual_goal_builder)
+    monkeypatch.setattr(agents_sdk_investigation_service, "build_investigation_goal", sdk_goal_builder)
     monkeypatch.setattr(ai_investigation_service, "build_investigation_input", manual_builder)
     monkeypatch.setattr(agents_sdk_investigation_service, "build_investigation_input", sdk_builder)
     gateway = FakeResponsesGateway([final_turn()])
@@ -90,17 +112,77 @@ def test_both_runtimes_call_shared_builder_and_deliver_same_payload(seeded_clien
     sdk = run_sdk(seeded_client, model)
     assert manual.status_code == 200, manual.text
     assert sdk.status_code == 200, sdk.text
+    manual_goal_builder.assert_called_once_with()
+    sdk_goal_builder.assert_called_once_with()
     manual_builder.assert_called_once()
     sdk_builder.assert_called_once()
-    expected = build_investigation_input(manual_builder.call_args.args[0])
-    assert expected == build_investigation_input(sdk_builder.call_args.args[0])
+    assert manual_builder.call_args.args[1] is manual_goals[0]
+    assert sdk_builder.call_args.args[1] is sdk_goals[0]
+    expected = build_investigation_input(
+        manual_builder.call_args.args[0], manual_goals[0]
+    )
+    assert expected == build_investigation_input(
+        sdk_builder.call_args.args[0], sdk_goals[0]
+    )
     assert gateway.initial_inputs == [expected]
     sdk_input = model.calls[0]["input"]
     if isinstance(sdk_input, list):
         sdk_input = next(item["content"] for item in sdk_input if item.get("role") == "user")
     assert sdk_input == expected
     for response in [manual, sdk]:
-        result = response.json()["investigation"]["result"]
+        investigation = response.json()["investigation"]
+        assert InvestigationGoal.model_validate(investigation["goal_snapshot"])
+        assert investigation["goal_snapshot"] == json.loads(expected)["goal"]
+        result = investigation["result"]
         assert result["human_action_required"] is True
         assert result["status"] == "insufficient_evidence"
         assert result["evidence_ids"] == []
+
+
+def test_failed_responses_run_keeps_goal_snapshot(seeded_client):
+    class FailedGateway:
+        model = "fake-responses-model"
+
+        def __init__(self):
+            self.initial_inputs = []
+
+        def create_initial(self, incident_input: str):
+            self.initial_inputs.append(incident_input)
+            from integrations.responses_gateway import ResponsesProviderError
+
+            raise ResponsesProviderError("ai_rate_limited", "OpenAI rate limit reached")
+
+    gateway = FailedGateway()
+    response = run_manual(seeded_client, "INC-019", gateway)
+    assert response.status_code == 502
+
+    stored = seeded_client.get("/incidents/INC-019/ai-investigation").json()[
+        "investigation"
+    ]
+    assert stored["status"] == "failed"
+    assert stored["goal_snapshot"] == json.loads(gateway.initial_inputs[0])["goal"]
+    assert InvestigationGoal.model_validate(stored["goal_snapshot"])
+
+
+def test_historical_goal_snapshot_is_not_reconstructed_or_changed(
+    seeded_client, monkeypatch
+):
+    original = build_investigation_goal()
+    goal_a = original.model_copy(update={"objective": "Historical objective A"})
+    goal_b = original.model_copy(update={"objective": "Later objective B"})
+    goal_builder = Mock(side_effect=[goal_a, goal_b])
+    monkeypatch.setattr(ai_investigation_service, "build_investigation_goal", goal_builder)
+
+    first = run_manual(
+        seeded_client, "INC-019", FakeResponsesGateway([final_turn("goal-a")])
+    ).json()
+    second = run_manual(
+        seeded_client, "INC-019", FakeResponsesGateway([final_turn("goal-b")])
+    ).json()
+
+    first_id = first["investigation"]["id"]
+    historical = seeded_client.get(
+        f"/incidents/INC-019/investigation-runs/{first_id}"
+    ).json()
+    assert historical["goal_snapshot"] == goal_a.model_dump(mode="json")
+    assert second["investigation"]["goal_snapshot"] == goal_b.model_dump(mode="json")

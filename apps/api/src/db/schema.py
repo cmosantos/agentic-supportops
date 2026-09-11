@@ -81,6 +81,17 @@ def ensure_sqlite_schema_compatibility(engine: Engine) -> None:
             )
 
         if "ai_investigations" in tables:
+            investigation_columns = {
+                column["name"]
+                for column in inspector.get_columns("ai_investigations")
+            }
+            if "goal_snapshot" not in investigation_columns:
+                connection.execute(
+                    text(
+                        "ALTER TABLE ai_investigations "
+                        "ADD COLUMN goal_snapshot JSON"
+                    )
+                )
             unique_constraints = inspector.get_unique_constraints("ai_investigations")
             unique_indexes = inspector.get_indexes("ai_investigations")
             legacy_unique_shapes = (["incident_id"], ["incident_id", "mode"])
@@ -107,7 +118,8 @@ def ensure_sqlite_schema_compatibility(engine: Engine) -> None:
                         "mode VARCHAR(20) NOT NULL, "
                         "status VARCHAR(21) NOT NULL, "
                         "model VARCHAR(100) NOT NULL, "
-                        "response_id VARCHAR(200), result JSON, usage JSON NOT NULL, "
+                        "response_id VARCHAR(200), goal_snapshot JSON, result JSON, "
+                        "usage JSON NOT NULL, "
                         "error JSON, created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL, "
                         "completed_at DATETIME, "
                         "FOREIGN KEY(incident_id) REFERENCES incidents (id))"
@@ -116,10 +128,11 @@ def ensure_sqlite_schema_compatibility(engine: Engine) -> None:
                 connection.execute(
                     text(
                         "INSERT INTO ai_investigations_m07 "
-                        "(id, incident_id, mode, status, model, response_id, result, usage, "
-                        "error, created_at, completed_at) "
-                        "SELECT id, incident_id, mode, status, model, response_id, result, usage, "
-                        "error, created_at, completed_at FROM ai_investigations"
+                        "(id, incident_id, mode, status, model, response_id, "
+                        "goal_snapshot, result, usage, error, created_at, completed_at) "
+                        "SELECT id, incident_id, mode, status, model, response_id, "
+                        "goal_snapshot, result, usage, error, created_at, completed_at "
+                        "FROM ai_investigations"
                     )
                 )
                 connection.execute(text("DROP TABLE ai_investigations"))

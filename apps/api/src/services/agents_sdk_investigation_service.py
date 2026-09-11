@@ -12,7 +12,10 @@ from integrations.agents_sdk_runtime import (
     build_supportops_agent,
 )
 from repositories.investigation_repository import InvestigationRepository
-from services.investigation_input import build_investigation_input
+from services.investigation_input import (
+    build_investigation_goal,
+    build_investigation_input,
+)
 from services.investigation_runtime_core import (
     AIInvestigationError,
     InvestigationRunSession,
@@ -75,12 +78,15 @@ class AgentsSDKInvestigationService:
     def _investigate(self, incident: IncidentRecord) -> AIInvestigationExecution:
         if self._model is None:
             raise AIInvestigationError("ai_not_configured", "OpenAI is not configured")
+        goal = build_investigation_goal()
+        investigation_input = build_investigation_input(incident, goal)
         session = InvestigationRunSession.start(
             self._repository,
             incident.id,
             self._model_name,
             mode=AGENTS_SDK_MODE,
             runtime=InvestigationRuntime.AGENTS_SDK,
+            goal_snapshot=goal,
         )
         run = session.run
         events = session.events
@@ -108,7 +114,7 @@ class AgentsSDKInvestigationService:
         try:
             result = Runner.run_sync(
                 agent,
-                build_investigation_input(incident),
+                investigation_input,
                 context=context,
                 max_turns=self._max_turns,
                 run_config=RunConfig(tracing_disabled=True),

@@ -11,7 +11,7 @@ from domain.ai import (
     InvestigationRuntime,
     ProviderUsage,
 )
-from domain.investigation import InvestigationOrigin, ToolResult
+from domain.investigation import InvestigationGoal, InvestigationOrigin, ToolResult
 from observability.tracing import TraceBoundary
 from repositories.investigation_repository import InvestigationRepository
 from services.investigation_event_recorder import InvestigationEventRecorder
@@ -83,8 +83,14 @@ class InvestigationRunSession:
         model: str,
         mode: str,
         runtime: InvestigationRuntime,
+        goal_snapshot: InvestigationGoal | None = None,
     ) -> "InvestigationRunSession":
-        run = repository.start_ai_run(incident_id, model, mode=mode)
+        run = repository.start_ai_run(
+            incident_id,
+            model,
+            mode=mode,
+            goal_snapshot=goal_snapshot,
+        )
         events = InvestigationEventRecorder(repository, run.id, runtime)
         started_at = monotonic()
         events.record(InvestigationEventType.RUN_STARTED, model=model, status="running")

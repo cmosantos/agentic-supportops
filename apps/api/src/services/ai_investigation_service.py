@@ -22,7 +22,10 @@ from domain.investigation import (
 )
 from integrations.responses_gateway import ResponsesProviderError
 from repositories.investigation_repository import InvestigationRepository
-from services.investigation_input import build_investigation_input
+from services.investigation_input import (
+    build_investigation_goal,
+    build_investigation_input,
+)
 from services.tool_registry import InvestigationToolRegistry
 from services.investigation_event_recorder import InvestigationEventRecorder
 from services.investigation_runtime_core import (
@@ -88,12 +91,15 @@ class AIInvestigationService:
     def _investigate(self, incident: IncidentRecord) -> AIInvestigationExecution:
         if self._gateway is None:
             raise AIInvestigationError("ai_not_configured", "OpenAI is not configured")
+        goal = build_investigation_goal()
+        investigation_input = build_investigation_input(incident, goal)
         session = InvestigationRunSession.start(
             self._repository,
             incident.id,
             self._gateway.model,
             mode="ai",
             runtime=InvestigationRuntime.MANUAL_RESPONSES,
+            goal_snapshot=goal,
         )
         run = session.run
         events = session.events
@@ -101,7 +107,7 @@ class AIInvestigationService:
         last_response_id: str | None = None
         try:
             turn = self._model_turn(
-                events, 1, lambda: self._gateway.create_initial(build_investigation_input(incident))
+                events, 1, lambda: self._gateway.create_initial(investigation_input)
             )
             iterations = 1
             usage = self._add_usage(usage, turn.usage)

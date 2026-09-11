@@ -4,9 +4,9 @@ from db.models import IncidentRecord
 from domain.investigation import InvestigationGoal
 
 
-def build_investigation_input(incident: IncidentRecord) -> str:
-    """Describe what is required; runtime governance remains authoritative."""
-    goal = InvestigationGoal(
+def build_investigation_goal() -> InvestigationGoal:
+    """Build the application-owned outcome and boundaries for a model-guided run."""
+    return InvestigationGoal(
         objective=(
             "Determine the most likely incident cause using persisted diagnostic evidence. "
             "Explicitly report insufficient or conflicting evidence. Recommend next steps "
@@ -28,6 +28,14 @@ def build_investigation_input(incident: IncidentRecord) -> str:
         ],
         human_action_required=True,
     )
+
+
+def build_investigation_input(
+    incident: IncidentRecord,
+    goal: InvestigationGoal | None = None,
+) -> str:
+    """Describe what is required; runtime governance remains authoritative."""
+    goal = goal or build_investigation_goal()
     return json.dumps({
         "goal": goal.model_dump(mode="json"),
         "incident": {

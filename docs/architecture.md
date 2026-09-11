@@ -41,8 +41,8 @@ The UI launches deterministic and manual Responses API investigations. The Agent
 ### Application-owned investigation goal
 
 Both Responses and Agents SDK receive the same JSON input from
-`build_investigation_input(IncidentRecord)`, with separate `goal` and `incident`
-objects. The Pydantic `InvestigationGoal` defines the required outcome, success
+`build_investigation_input(IncidentRecord, InvestigationGoal)`, with separate
+`goal` and `incident` objects. The Pydantic `InvestigationGoal` defines the required outcome, success
 criteria, constraints, and human review requirement. The incident title remains
 a symptom label rather than evidence.
 
@@ -51,11 +51,14 @@ approval gates. The agent/runtime owns tool selection, delegation where supporte
 the investigation path, and synthesis within those boundaries. The goal prescribes
 no tool sequence and is not an LLM-generated plan. `InvestigationRuntimeCore` and
 existing policies remain authoritative; describing boundaries does not enforce or
-replace them. Investigation spans record only small goal-driven and human-review
-flags, not goal text.
-
-For this first slice, the goal is reconstructed deterministically for each run;
-it is not persisted or exposed in the frontend. No database migration is needed.
+replace them. Model-guided runs persist the exact application-owned goal as
+immutable run audit metadata when the run is created, before provider interaction.
+The snapshot is not an execution plan and contains no prompt, provider payload,
+scratchpad, hidden reasoning, or chain of thought. Legacy and deterministic records
+may have no goal snapshot. `InvestigationRuntimeCore` and policies remain the
+authoritative enforcement boundaries. Investigation spans record only small
+goal-driven and human-review flags, not goal text. Frontend presentation of the
+snapshot is intentionally deferred to a later slice.
 
 ### Deterministic
 

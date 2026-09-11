@@ -1,9 +1,12 @@
 import pytest
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
 
 from db.base import Base
+from db.models import AIInvestigationRecord
 from db.schema import ensure_sqlite_schema_compatibility
+from domain.ai import AIInvestigationRead
 
 
 def test_legacy_sqlite_schema_is_upgraded_without_losing_data(tmp_path) -> None:
@@ -55,6 +58,10 @@ def test_legacy_sqlite_schema_is_upgraded_without_losing_data(tmp_path) -> None:
         "investigation_id",
     }
     assert "ai_investigations" in inspector.get_table_names()
+    assert "goal_snapshot" in {
+        column["name"]
+        for column in inspector.get_columns("ai_investigations")
+    }
     assert "investigation_events" in inspector.get_table_names()
     with engine.connect() as connection:
         evidence = connection.execute(
@@ -407,9 +414,16 @@ def test_legacy_ai_run_uniqueness_becomes_runtime_specific(tmp_path) -> None:
 
     ensure_sqlite_schema_compatibility(engine)
     ensure_sqlite_schema_compatibility(engine)
+    inspector = inspect(engine)
+    assert "goal_snapshot" in {
+        column["name"] for column in inspector.get_columns("ai_investigations")
+    }
     with engine.begin() as connection:
         existing = connection.execute(
-            text("SELECT mode, response_id FROM ai_investigations WHERE incident_id=19")
+            text(
+                "SELECT mode, response_id, goal_snapshot "
+                "FROM ai_investigations WHERE incident_id=19"
+            )
         ).one()
         connection.execute(
             text(
@@ -421,8 +435,11 @@ def test_legacy_ai_run_uniqueness_becomes_runtime_specific(tmp_path) -> None:
         count = connection.execute(
             text("SELECT COUNT(*) FROM ai_investigations WHERE incident_id=19")
         ).scalar_one()
-    assert existing == ("ai", "resp-existing")
+    assert existing == ("ai", "resp-existing", None)
     assert count == 2
+    with Session(engine) as session:
+        legacy = session.get(AIInvestigationRecord, 1)
+        assert AIInvestigationRead.model_validate(legacy).goal_snapshot is None
     engine.dispose()
 
 
@@ -437,7 +454,8 @@ def test_legacy_ai_unique_index_shape_is_migrated_idempotently(tmp_path) -> None
                 "id INTEGER PRIMARY KEY, incident_id INTEGER NOT NULL, "
                 "mode VARCHAR(20) NOT NULL, status VARCHAR(21) NOT NULL, "
                 "model VARCHAR(100) NOT NULL, response_id VARCHAR(200), result JSON, "
-                "usage JSON NOT NULL, error JSON, created_at DATETIME NOT NULL, "
+                "goal_snapshot JSON, usage JSON NOT NULL, error JSON, "
+                "created_at DATETIME NOT NULL, "
                 "completed_at DATETIME, "
                 "FOREIGN KEY(incident_id) REFERENCES incidents(id))"
             )
@@ -458,11 +476,16 @@ def test_legacy_ai_unique_index_shape_is_migrated_idempotently(tmp_path) -> None
             text(
                 "INSERT INTO ai_investigations VALUES "
                 "(7, 19, 'ai', 'COMPLETED', 'gpt-4.1-mini', 'resp-manual', "
-                ":result, :usage, NULL, "
+                ":result, :goal_snapshot, :usage, NULL, "
                 "'2026-08-27 10:00:00', '2026-08-27 10:01:00')"
             ),
             {
                 "result": '{"diagnosis":"DNS failure"}',
+                "goal_snapshot": (
+                    '{"objective":"Historical objective","success_criteria":'
+                    '["Persist evidence"],"constraints":["Read only"],'
+                    '"human_action_required":true}'
+                ),
                 "usage": (
                     '{"total_tokens":2960,"runtime":"manual_responses"}'
                 ),
@@ -482,7 +505,8 @@ def test_legacy_ai_unique_index_shape_is_migrated_idempotently(tmp_path) -> None
         preserved = connection.execute(
             text(
                 "SELECT id, incident_id, mode, status, model, response_id, result, "
-                "usage, error, created_at, completed_at FROM ai_investigations"
+                "goal_snapshot, usage, error, created_at, completed_at "
+                "FROM ai_investigations"
             )
         ).one()
     assert preserved == (
@@ -493,6 +517,11 @@ def test_legacy_ai_unique_index_shape_is_migrated_idempotently(tmp_path) -> None
         "gpt-4.1-mini",
         "resp-manual",
         '{"diagnosis":"DNS failure"}',
+        (
+            '{"objective":"Historical objective","success_criteria":'
+            '["Persist evidence"],"constraints":["Read only"],'
+            '"human_action_required":true}'
+        ),
         '{"total_tokens":2960,"runtime":"manual_responses"}',
         None,
         "2026-08-27 10:00:00",

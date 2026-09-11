@@ -4,7 +4,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from domain.investigation import EvidenceRead, InvestigationStepRead
+from domain.investigation import EvidenceRead, InvestigationGoal, InvestigationStepRead
 from domain.action_proposal import ModelActionProposal
 
 
@@ -126,6 +126,7 @@ class AIInvestigationRead(BaseModel):
     status: AIInvestigationStatus
     model: str
     response_id: str | None
+    goal_snapshot: InvestigationGoal | None
     result: AIInvestigationResult | None
     usage: ProviderUsage
     error: dict[str, Any] | None

@@ -486,6 +486,8 @@ def test_unexpected_provider_failure_is_bounded(seeded_client: TestClient) -> No
         "message": "Agents SDK investigation failed",
     }
     assert "offline" not in response.text
+    stored = seeded_client.get("/incidents/INC-019/agent-sdk-investigation").json()
+    assert stored["investigation"]["goal_snapshot"] is not None
 
 
 def test_openai_provider_failure_is_mapped(seeded_client: TestClient) -> None:

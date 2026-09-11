@@ -117,6 +117,7 @@ class AIInvestigationRecord(Base):
     )
     model: Mapped[str] = mapped_column(String(100))
     response_id: Mapped[str | None] = mapped_column(String(200))
+    goal_snapshot: Mapped[dict | None] = mapped_column(JSON)
     result: Mapped[dict | None] = mapped_column(JSON)
     usage: Mapped[dict] = mapped_column(JSON, default=dict)
     error: Mapped[dict | None] = mapped_column(JSON)
