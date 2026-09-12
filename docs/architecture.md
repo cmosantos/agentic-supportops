@@ -48,20 +48,43 @@ incident category. Responses and Agents SDK receive the same JSON input from
 criteria, constraints, and human review requirement. The incident title remains
 a symptom label rather than evidence.
 
-The application owns the goal, constraints, policies, persisted evidence, and
-approval gates. The agent/runtime owns tool selection, delegation where supported,
-the investigation path, and synthesis within those boundaries. The goal prescribes
-no tool sequence and is not an LLM-generated plan. `InvestigationRuntimeCore` and
-existing policies remain authoritative; describing boundaries does not enforce or
-replace them. Every new run persists the exact application-owned goal as immutable
-run audit metadata when the run is created, before tool or provider interaction.
-The snapshot is not an execution plan and contains no prompt, provider payload,
-scratchpad, hidden reasoning, or chain of thought. Legacy records may have no goal
-snapshot. `InvestigationRuntimeCore` and policies remain the
-authoritative enforcement boundaries. Investigation spans record only small
-goal-driven and human-review flags plus a short fingerprint that can be correlated
-with the persisted snapshot; they do not record goal text. The review UI presents
-the persisted contract as read-only run governance for any runtime that has one.
+The application owns the goal, plan, constraints, policies, persisted evidence,
+and approval gates. The runtime owns actual tool selection and delegation where
+supported within those boundaries. The goal prescribes no tool sequence and is not
+an LLM-generated plan. `InvestigationRuntimeCore` and existing policies remain
+authoritative; describing intent does not enforce or replace them. Every new run
+persists the exact application-owned goal and plan as immutable run audit metadata
+when the run is created, before tool or provider interaction. Neither snapshot
+contains a prompt, provider payload, scratchpad, hidden reasoning, or chain of
+thought. Legacy records may have no goal or plan snapshot. Investigation spans
+record only small goal-driven and human-review flags plus a short fingerprint that
+can be correlated with the persisted goal; they do not record goal or plan text.
+The review UI presents the persisted contract as secondary, read-only governance.
+
+### Application-owned investigation plan
+
+`InvestigationPlan` describes how a run intends to pursue its exact
+`InvestigationGoal`. It is a strict ordered list of steps containing only
+`sequence`, `intended_action`, and `purpose`. The plan has no execution status,
+results, evidence references, agent names, reasoning metadata, or artificial step
+identifier. Actual `InvestigationStepRecord` rows remain the factual tool history.
+
+The application builds the plan deterministically. For Responses API and Agents
+SDK runs, both runtimes receive the same high-level plan shape alongside `goal` and
+`incident`; the exact same plan object is persisted before the first provider call.
+The plan guides intent but does not expand tool access, specialist access, runtime
+limits, or policy. There is no planner model call, planner agent, plan executor, or
+mapping between planned steps and actual tool calls.
+
+For deterministic runs, the plan is a human-readable projection of the already
+resolved catalog playbook. The service builds it from the same resolved sequence
+that it subsequently executes. The existing `PLAYBOOKS` definition remains the
+only execution authority; plan text is never interpreted as executable input.
+
+`ai_investigations.plan_snapshot` is nullable JSON stored beside
+`goal_snapshot`. Both are committed in the run envelope before execution. Legacy
+null values remain absent and are never reconstructed from current builders or
+playbooks.
 
 ### Deterministic
 
@@ -128,7 +151,7 @@ Evidence is a successful, normalized read-only `ToolResult` persisted by the app
 
 The model can choose only schemas exposed by the application registry. MCP discovery never expands that policy: the MCP transport has its own fixed subset, validates arguments before starting stdio, and normalizes the server response back to `ToolResult` before persistence.
 
-The persisted plan is deliberately lightweight: ordered model/tool events show what category was checked without storing chain-of-thought, scratchpads, prompts, or private deliberation. Recommendations remain human-controlled; no tool can execute the proposed remediation.
+The persisted activity trail is deliberately lightweight: ordered model/tool events show what category was checked without storing chain-of-thought, scratchpads, prompts, or private deliberation. This factual activity remains separate from the immutable intended plan. Recommendations remain human-controlled; no investigation tool can execute the proposed remediation.
 
 ## Human approval boundary
 

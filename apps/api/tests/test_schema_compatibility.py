@@ -58,7 +58,7 @@ def test_legacy_sqlite_schema_is_upgraded_without_losing_data(tmp_path) -> None:
         "investigation_id",
     }
     assert "ai_investigations" in inspector.get_table_names()
-    assert "goal_snapshot" in {
+    assert {"goal_snapshot", "plan_snapshot"} <= {
         column["name"]
         for column in inspector.get_columns("ai_investigations")
     }
@@ -415,13 +415,13 @@ def test_legacy_ai_run_uniqueness_becomes_runtime_specific(tmp_path) -> None:
     ensure_sqlite_schema_compatibility(engine)
     ensure_sqlite_schema_compatibility(engine)
     inspector = inspect(engine)
-    assert "goal_snapshot" in {
+    assert {"goal_snapshot", "plan_snapshot"} <= {
         column["name"] for column in inspector.get_columns("ai_investigations")
     }
     with engine.begin() as connection:
         existing = connection.execute(
             text(
-                "SELECT mode, response_id, goal_snapshot "
+                "SELECT mode, response_id, goal_snapshot, plan_snapshot "
                 "FROM ai_investigations WHERE incident_id=19"
             )
         ).one()
@@ -435,7 +435,7 @@ def test_legacy_ai_run_uniqueness_becomes_runtime_specific(tmp_path) -> None:
         count = connection.execute(
             text("SELECT COUNT(*) FROM ai_investigations WHERE incident_id=19")
         ).scalar_one()
-    assert existing == ("ai", "resp-existing", None)
+    assert existing == ("ai", "resp-existing", None, None)
     assert count == 2
     with Session(engine) as session:
         legacy = session.get(AIInvestigationRecord, 1)
@@ -454,7 +454,7 @@ def test_legacy_ai_unique_index_shape_is_migrated_idempotently(tmp_path) -> None
                 "id INTEGER PRIMARY KEY, incident_id INTEGER NOT NULL, "
                 "mode VARCHAR(20) NOT NULL, status VARCHAR(21) NOT NULL, "
                 "model VARCHAR(100) NOT NULL, response_id VARCHAR(200), result JSON, "
-                "goal_snapshot JSON, usage JSON NOT NULL, error JSON, "
+                "goal_snapshot JSON, plan_snapshot JSON, usage JSON NOT NULL, error JSON, "
                 "created_at DATETIME NOT NULL, "
                 "completed_at DATETIME, "
                 "FOREIGN KEY(incident_id) REFERENCES incidents(id))"
@@ -476,7 +476,7 @@ def test_legacy_ai_unique_index_shape_is_migrated_idempotently(tmp_path) -> None
             text(
                 "INSERT INTO ai_investigations VALUES "
                 "(7, 19, 'ai', 'COMPLETED', 'gpt-4.1-mini', 'resp-manual', "
-                ":result, :goal_snapshot, :usage, NULL, "
+                ":result, :goal_snapshot, :plan_snapshot, :usage, NULL, "
                 "'2026-08-27 10:00:00', '2026-08-27 10:01:00')"
             ),
             {
@@ -485,6 +485,10 @@ def test_legacy_ai_unique_index_shape_is_migrated_idempotently(tmp_path) -> None
                     '{"objective":"Historical objective","success_criteria":'
                     '["Persist evidence"],"constraints":["Read only"],'
                     '"human_action_required":true}'
+                ),
+                "plan_snapshot": (
+                    '{"steps":[{"sequence":1,"intended_action":'
+                    '"Inspect historical state.","purpose":"Preserve history."}]}'
                 ),
                 "usage": (
                     '{"total_tokens":2960,"runtime":"manual_responses"}'
@@ -505,7 +509,7 @@ def test_legacy_ai_unique_index_shape_is_migrated_idempotently(tmp_path) -> None
         preserved = connection.execute(
             text(
                 "SELECT id, incident_id, mode, status, model, response_id, result, "
-                "goal_snapshot, usage, error, created_at, completed_at "
+                "goal_snapshot, plan_snapshot, usage, error, created_at, completed_at "
                 "FROM ai_investigations"
             )
         ).one()
@@ -521,6 +525,10 @@ def test_legacy_ai_unique_index_shape_is_migrated_idempotently(tmp_path) -> None
             '{"objective":"Historical objective","success_criteria":'
             '["Persist evidence"],"constraints":["Read only"],'
             '"human_action_required":true}'
+        ),
+        (
+            '{"steps":[{"sequence":1,"intended_action":'
+            '"Inspect historical state.","purpose":"Preserve history."}]}'
         ),
         '{"total_tokens":2960,"runtime":"manual_responses"}',
         None,

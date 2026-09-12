@@ -95,6 +95,18 @@ def test_gateway_uses_current_responses_continuation_shape() -> None:
     assert result_schema["additionalProperties"] is False
 
 
+def test_gateway_instructions_treat_plan_as_intent_not_authority() -> None:
+    responses = FakeSDKResponses()
+    gateway = gateway_with_client(SimpleNamespace(responses=responses))
+
+    gateway.create_initial("incident")
+
+    instructions = responses.requests[0]["instructions"]
+    assert "application-owned `plan`" in instructions
+    assert "does not expand available tools" in instructions
+    assert "runtime limits" in instructions
+
+
 def test_gateway_constructs_sdk_with_retry_and_timeout_controls(monkeypatch) -> None:
     captured: dict = {}
     fake_client = SimpleNamespace(responses=FakeSDKResponses())

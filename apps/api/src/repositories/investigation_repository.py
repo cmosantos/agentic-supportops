@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from db.models import AIInvestigationRecord, EvidenceRecord, InvestigationEventRecord, InvestigationStepRecord
 from domain.ai import AIInvestigationResult, AIInvestigationStatus, InvestigationEventType, InvestigationRuntime, ProviderUsage
-from domain.investigation import InvestigationGoal, InvestigationOrigin, InvestigationStepStatus, ToolResult
+from domain.investigation import InvestigationGoal, InvestigationOrigin, InvestigationPlan, InvestigationStepStatus, ToolResult
 from observability.tracing import TraceBoundary
 
 
@@ -145,6 +145,7 @@ class InvestigationRepository:
         model: str,
         mode: str = "ai",
         goal_snapshot: InvestigationGoal | None = None,
+        plan_snapshot: InvestigationPlan | None = None,
     ) -> AIInvestigationRecord:
         with self._tracing.span(
             "supportops.persistence.write",
@@ -154,7 +155,9 @@ class InvestigationRepository:
                 "supportops.runtime": self._runtime_for_mode(mode),
             },
         ):
-            return self._start_ai_run(incident_id, model, mode, goal_snapshot)
+            return self._start_ai_run(
+                incident_id, model, mode, goal_snapshot, plan_snapshot
+            )
 
     def _start_ai_run(
         self,
@@ -162,6 +165,7 @@ class InvestigationRepository:
         model: str,
         mode: str,
         goal_snapshot: InvestigationGoal | None,
+        plan_snapshot: InvestigationPlan | None,
     ) -> AIInvestigationRecord:
         record = AIInvestigationRecord(
             incident_id=incident_id,
@@ -171,6 +175,11 @@ class InvestigationRepository:
             goal_snapshot=(
                 goal_snapshot.model_dump(mode="json")
                 if goal_snapshot is not None
+                else None
+            ),
+            plan_snapshot=(
+                plan_snapshot.model_dump(mode="json")
+                if plan_snapshot is not None
                 else None
             ),
             usage=ProviderUsage(runtime=self._runtime_for_mode(mode)).model_dump(),

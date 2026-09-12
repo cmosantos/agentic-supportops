@@ -2,7 +2,7 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class GoalProfile(StrEnum):
@@ -29,6 +29,31 @@ class InvestigationGoal(BaseModel):
     success_criteria: list[str] = Field(min_length=1)
     constraints: list[str] = Field(min_length=1)
     human_action_required: bool
+
+
+class InvestigationPlanStep(BaseModel):
+    """One immutable statement of intended investigation work."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    sequence: int = Field(ge=1)
+    intended_action: str = Field(min_length=1)
+    purpose: str = Field(min_length=1)
+
+
+class InvestigationPlan(BaseModel):
+    """Application-owned intended path, separate from factual execution history."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    steps: list[InvestigationPlanStep] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def require_contiguous_ordered_sequence(self):
+        sequences = [step.sequence for step in self.steps]
+        if sequences != list(range(1, len(self.steps) + 1)):
+            raise ValueError("plan step sequence must be contiguous and ordered from 1")
+        return self
 
 
 class ToolErrorCode(StrEnum):

@@ -259,6 +259,9 @@ def test_orchestrator_instructions_define_resource_domain_boundaries() -> None:
     assert "Cross-domain delegation remains allowed only when the incident contains actual context or persisted evidence relevant to that specialist's domain." in agent.instructions
     assert "Delegation instructions must preserve identifiers exactly as supplied." in agent.instructions
     assert "Do not invent resource IDs, hostnames, service names, or other infrastructure facts." in agent.instructions
+    assert "application-owned `plan`" in agent.instructions
+    assert "does not expand available tools or specialist access" in agent.instructions
+    assert "runtime limits" in agent.instructions
 
 
 def test_endpoint_specialist_instructions_reject_non_device_identifiers() -> None:

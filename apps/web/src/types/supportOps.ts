@@ -45,6 +45,14 @@ export type InvestigationGoal = {
   constraints: string[];
   human_action_required: boolean;
 };
+export type InvestigationPlanStep = {
+  sequence: number;
+  intended_action: string;
+  purpose: string;
+};
+export type InvestigationPlan = {
+  steps: InvestigationPlanStep[];
+};
 export type AIResult = {
   status: AIStatus;
   summary: string;
@@ -180,6 +188,7 @@ export type AIExecution = {
     model: string;
     response_id: string | null;
     goal_snapshot: InvestigationGoal | null;
+    plan_snapshot: InvestigationPlan | null;
     result: AIResult | null;
     usage: {
       input_tokens: number;

@@ -61,6 +61,21 @@ const persistedGoalSnapshot = {
   human_action_required: true,
 };
 
+const persistedPlanSnapshot = {
+  steps: [
+    {
+      sequence: 1,
+      intended_action: "Collect incident-scoped diagnostic evidence.",
+      purpose: "Establish factual observations needed to pursue the goal.",
+    },
+    {
+      sequence: 2,
+      intended_action: "Produce a grounded finding.",
+      purpose: "Separate observed facts from assessment.",
+    },
+  ],
+};
+
 const actionableExecution = {
   investigation: {
     id: 20,
@@ -70,6 +85,7 @@ const actionableExecution = {
     model: "gpt-test",
     response_id: "response-test",
     goal_snapshot: persistedGoalSnapshot,
+    plan_snapshot: persistedPlanSnapshot,
     result: {
       status: "completed",
       summary: "Disk pressure confirmed.",
@@ -650,6 +666,9 @@ describe("Agentic SupportOps operator workflow", () => {
     expect(contractView.getByText(persistedGoalSnapshot.constraints[0])).toBeVisible();
     expect(contractView.getByText("Human Approval Required")).toBeVisible();
     expect(contractView.getByText("Yes")).toBeVisible();
+    expect(contractView.getByText("Investigation Plan")).toBeVisible();
+    expect(contractView.getByText(persistedPlanSnapshot.steps[0].intended_action)).toBeVisible();
+    expect(contractView.getByText(persistedPlanSnapshot.steps[0].purpose)).toBeVisible();
     expect(screen.getByRole("region", { name: "Current operational state" })).toHaveTextContent("Review findings");
     expect(screen.getByRole("button", { name: "Run investigation" })).toBeEnabled();
   });
@@ -660,6 +679,7 @@ describe("Agentic SupportOps operator workflow", () => {
       investigation: {
         ...actionableExecution.investigation,
         goal_snapshot: null,
+        plan_snapshot: null,
         result: { ...actionableExecution.investigation.result, proposed_action: null },
       },
     };
@@ -677,8 +697,37 @@ describe("Agentic SupportOps operator workflow", () => {
     expect(await screen.findByText("Disk pressure confirmed.")).toBeVisible();
     expect(screen.queryByText("Investigation Contract")).not.toBeInTheDocument();
     expect(screen.queryByText(persistedGoalSnapshot.objective)).not.toBeInTheDocument();
+    expect(screen.queryByText("Investigation Plan")).not.toBeInTheDocument();
     expect(screen.getByRole("region", { name: "Current operational state" })).toHaveTextContent("Review findings");
     expect(screen.getByRole("button", { name: "Run investigation" })).toBeEnabled();
+  });
+
+  it("keeps a historical goal visible without fabricating a missing plan", async () => {
+    const goalOnlyExecution = {
+      ...actionableExecution,
+      investigation: {
+        ...actionableExecution.investigation,
+        plan_snapshot: null,
+        result: { ...actionableExecution.investigation.result, proposed_action: null },
+      },
+    };
+    installFetch({
+      aiConfigured: true,
+      post: async (url) => url.endsWith("/investigate-ai")
+        ? jsonResponse(goalOnlyExecution)
+        : Promise.reject(new Error(`Unexpected request: ${url}`)),
+    });
+    render(<App />);
+
+    await selectIncident();
+    await runInvestigation("ai");
+
+    const summary = await screen.findByText("Investigation Contract");
+    await userEvent.click(summary);
+    const contract = summary.closest("details");
+    expect(contract).not.toBeNull();
+    expect(within(contract as HTMLElement).getByText(persistedGoalSnapshot.objective)).toBeVisible();
+    expect(within(contract as HTMLElement).queryByText("Investigation Plan")).not.toBeInTheDocument();
   });
 
   it("keeps unavailable AI runtimes visible in the active runtime selector", async () => {

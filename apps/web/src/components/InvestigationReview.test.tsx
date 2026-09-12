@@ -23,6 +23,20 @@ it("renders the persisted investigation contract for a deterministic run", async
           constraints: ["Use read-only investigation tools."],
           human_action_required: true,
         },
+        plan_snapshot: {
+          steps: [
+            {
+              sequence: 1,
+              intended_action: "Check DNS configuration.",
+              purpose: "Establish the configured resolver before connectivity checks.",
+            },
+            {
+              sequence: 2,
+              intended_action: "Check DNS resolution.",
+              purpose: "Determine whether the supplied hostname resolves.",
+            },
+          ],
+        },
         result: null,
         usage: {
           input_tokens: 0,
@@ -55,5 +69,10 @@ it("renders the persisted investigation contract for a deterministic run", async
     screen.getByText(
       /application-owned contract governed historical investigation run #21/i,
     ),
+  ).toBeVisible();
+  expect(screen.getByText("Investigation Plan")).toBeVisible();
+  expect(screen.getByText("Check DNS configuration.")).toBeVisible();
+  expect(
+    screen.getByText("Determine whether the supplied hostname resolves."),
   ).toBeVisible();
 });

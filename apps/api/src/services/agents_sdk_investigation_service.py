@@ -22,6 +22,7 @@ from services.investigation_input import (
     build_investigation_input,
     investigation_goal_trace_attributes,
 )
+from services.investigation_plan import build_model_guided_investigation_plan
 from services.investigation_runtime_core import (
     AIInvestigationError,
     InvestigationRunSession,
@@ -91,7 +92,8 @@ class AgentsSDKInvestigationService:
     ) -> AIInvestigationExecution:
         if self._model is None:
             raise AIInvestigationError("ai_not_configured", "OpenAI is not configured")
-        investigation_input = build_investigation_input(incident, goal)
+        plan = build_model_guided_investigation_plan(goal)
+        investigation_input = build_investigation_input(incident, goal, plan)
         session = InvestigationRunSession.start(
             self._repository,
             incident.id,
@@ -99,6 +101,7 @@ class AgentsSDKInvestigationService:
             mode=AGENTS_SDK_MODE,
             runtime=InvestigationRuntime.AGENTS_SDK,
             goal_snapshot=goal,
+            plan_snapshot=plan,
         )
         run = session.run
         events = session.events

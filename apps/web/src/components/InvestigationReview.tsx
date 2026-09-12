@@ -4,6 +4,7 @@ import type {
   Evidence,
   InvestigationEvent,
   InvestigationGoal,
+  InvestigationPlan,
   InvestigationRun,
   InvestigationStep,
 } from "../types/supportOps";
@@ -67,14 +68,14 @@ function EvidenceReference({ label, ids, evidence }: { label: string; ids: numbe
   );
 }
 
-function InvestigationContract({ goal, runId }: { goal: InvestigationGoal; runId: number }) {
+function InvestigationContract({ goal, plan, runId }: { goal: InvestigationGoal | null; plan: InvestigationPlan | null; runId: number }) {
   return (
     <details className="technical-details investigation-contract">
       <summary>Investigation Contract</summary>
       <p className="contract-context">
         This application-owned contract governed historical investigation run #{runId}. It is read-only audit metadata.
       </p>
-      <dl className="contract-fields">
+      {goal && <dl className="contract-fields">
         <div className="contract-objective">
           <dt>Objective</dt>
           <dd>{goal.objective}</dd>
@@ -91,7 +92,20 @@ function InvestigationContract({ goal, runId }: { goal: InvestigationGoal; runId
           <dt>Human Approval Required</dt>
           <dd>{goal.human_action_required ? "Yes" : "No"}</dd>
         </div>
-      </dl>
+      </dl>}
+      {plan && <section className="contract-plan" aria-labelledby={`investigation-plan-${runId}`}>
+        <div className="contract-plan-heading">
+          <p className="section-kicker">Intended approach</p>
+          <h4 id={`investigation-plan-${runId}`}>Investigation Plan</h4>
+        </div>
+        <p className="contract-plan-context">This ordered plan records intended work. Actual investigation activity is recorded separately.</p>
+        <ol>
+          {plan.steps.map((step) => <li key={step.sequence}>
+            <strong>{step.intended_action}</strong>
+            <p>{step.purpose}</p>
+          </li>)}
+        </ol>
+      </section>}
     </details>
   );
 }
@@ -193,8 +207,8 @@ export function InvestigationReview({ mode, run, status, result, evidence, steps
         </> : <p className="empty-state">No action proposal was recorded for this investigation.</p>}
       </aside>}
 
-      {run?.goal_snapshot && (
-        <InvestigationContract goal={run.goal_snapshot} runId={run.id} />
+      {run && (run.goal_snapshot || run.plan_snapshot) && (
+        <InvestigationContract goal={run.goal_snapshot} plan={run.plan_snapshot} runId={run.id} />
       )}
 
       {mode && <details className="technical-details">

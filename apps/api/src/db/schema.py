@@ -92,6 +92,13 @@ def ensure_sqlite_schema_compatibility(engine: Engine) -> None:
                         "ADD COLUMN goal_snapshot JSON"
                     )
                 )
+            if "plan_snapshot" not in investigation_columns:
+                connection.execute(
+                    text(
+                        "ALTER TABLE ai_investigations "
+                        "ADD COLUMN plan_snapshot JSON"
+                    )
+                )
             unique_constraints = inspector.get_unique_constraints("ai_investigations")
             unique_indexes = inspector.get_indexes("ai_investigations")
             legacy_unique_shapes = (["incident_id"], ["incident_id", "mode"])
@@ -118,7 +125,8 @@ def ensure_sqlite_schema_compatibility(engine: Engine) -> None:
                         "mode VARCHAR(20) NOT NULL, "
                         "status VARCHAR(21) NOT NULL, "
                         "model VARCHAR(100) NOT NULL, "
-                        "response_id VARCHAR(200), goal_snapshot JSON, result JSON, "
+                        "response_id VARCHAR(200), goal_snapshot JSON, "
+                        "plan_snapshot JSON, result JSON, "
                         "usage JSON NOT NULL, "
                         "error JSON, created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL, "
                         "completed_at DATETIME, "
@@ -129,9 +137,11 @@ def ensure_sqlite_schema_compatibility(engine: Engine) -> None:
                     text(
                         "INSERT INTO ai_investigations_m07 "
                         "(id, incident_id, mode, status, model, response_id, "
-                        "goal_snapshot, result, usage, error, created_at, completed_at) "
+                        "goal_snapshot, plan_snapshot, result, usage, error, "
+                        "created_at, completed_at) "
                         "SELECT id, incident_id, mode, status, model, response_id, "
-                        "goal_snapshot, result, usage, error, created_at, completed_at "
+                        "goal_snapshot, plan_snapshot, result, usage, error, "
+                        "created_at, completed_at "
                         "FROM ai_investigations"
                     )
                 )

@@ -16,6 +16,7 @@ from services.investigation_input import (
     build_investigation_goal,
     investigation_goal_trace_attributes,
 )
+from services.investigation_plan import build_deterministic_investigation_plan
 from services.playbooks import PLAYBOOKS
 from services.tool_registry import InvestigationToolRegistry
 
@@ -55,6 +56,9 @@ class InvestigationService:
         ]
         if goal is None:
             goal = build_investigation_goal(incident)
+        plan = build_deterministic_investigation_plan(
+            goal, resolved_playbook, self._tools
+        )
         attributes = {
             "supportops.incident_reference": incident.catalog_id or str(incident.id),
             "supportops.runtime": "deterministic",
@@ -67,6 +71,7 @@ class InvestigationService:
                 model="deterministic-playbook",
                 mode="deterministic",
                 goal_snapshot=goal,
+                plan_snapshot=plan,
             )
             try:
                 for step, arguments in resolved_playbook:

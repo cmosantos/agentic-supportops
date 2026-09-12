@@ -2,7 +2,8 @@ import json
 from hashlib import sha256
 
 from db.models import IncidentRecord
-from domain.investigation import GoalProfile, InvestigationGoal
+from domain.investigation import GoalProfile, InvestigationGoal, InvestigationPlan
+from services.investigation_plan import build_model_guided_investigation_plan
 
 
 _GOAL_FOCUS_BY_CATEGORY = {
@@ -94,11 +95,14 @@ def investigation_goal_trace_attributes(
 def build_investigation_input(
     incident: IncidentRecord,
     goal: InvestigationGoal | None = None,
+    plan: InvestigationPlan | None = None,
 ) -> str:
     """Describe what is required; runtime governance remains authoritative."""
     goal = goal or build_investigation_goal()
+    plan = plan or build_model_guided_investigation_plan(goal)
     return json.dumps({
         "goal": goal.model_dump(mode="json"),
+        "plan": plan.model_dump(mode="json"),
         "incident": {
             "catalog_id": incident.catalog_id,
             "title": incident.title,

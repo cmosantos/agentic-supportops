@@ -11,7 +11,12 @@ from domain.ai import (
     InvestigationRuntime,
     ProviderUsage,
 )
-from domain.investigation import InvestigationGoal, InvestigationOrigin, ToolResult
+from domain.investigation import (
+    InvestigationGoal,
+    InvestigationOrigin,
+    InvestigationPlan,
+    ToolResult,
+)
 from observability.tracing import TraceBoundary
 from repositories.investigation_repository import InvestigationRepository
 from services.investigation_event_recorder import InvestigationEventRecorder
@@ -84,12 +89,14 @@ class InvestigationRunSession:
         mode: str,
         runtime: InvestigationRuntime,
         goal_snapshot: InvestigationGoal | None = None,
+        plan_snapshot: InvestigationPlan | None = None,
     ) -> "InvestigationRunSession":
         run = repository.start_ai_run(
             incident_id,
             model,
             mode=mode,
             goal_snapshot=goal_snapshot,
+            plan_snapshot=plan_snapshot,
         )
         events = InvestigationEventRecorder(repository, run.id, runtime)
         started_at = monotonic()

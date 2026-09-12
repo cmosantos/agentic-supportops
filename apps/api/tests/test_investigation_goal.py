@@ -46,7 +46,7 @@ def test_input_preserves_incident_separately_and_deterministically(incident):
     raw = build_investigation_input(incident)
     assert build_investigation_input(incident) == raw
     payload = json.loads(raw)
-    assert set(payload) == {"goal", "incident"}
+    assert set(payload) == {"goal", "plan", "incident"}
     assert payload["incident"] == {
         "catalog_id": incident.catalog_id, "title": incident.title,
         "description": incident.description, "category": incident.category,
