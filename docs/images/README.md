@@ -1,0 +1,1 @@
+Project screenshots are referenced from the repository root README.
