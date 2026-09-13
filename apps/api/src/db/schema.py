@@ -7,7 +7,7 @@ _KNOWN_PRE_MUTATION_FAILURES = {"application_not_found", "service_not_found"}
 
 
 def ensure_sqlite_schema_compatibility(engine: Engine) -> None:
-    """Apply the small, idempotent schema evolution required by Mission 04."""
+    """Apply the small, idempotent SQLite schema compatibility updates."""
     if engine.dialect.name != "sqlite":
         return
 

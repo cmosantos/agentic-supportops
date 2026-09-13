@@ -12,7 +12,7 @@ The Contoso environment is a local JSON fixture validated into typed Pydantic mo
 
 ## Incident catalog
 
-The fixture contains `INC-001` through `INC-025`, spanning identity, messaging, endpoint, network, and infrastructure scenarios. Each record has an explicit affected resource and a small investigation context. Six playbooks are deeply supported:
+The fixture contains `INC-001` through `INC-026`, spanning identity, messaging, endpoint, network, and infrastructure scenarios. Each record has an explicit affected resource and a small investigation context. Eight playbooks are deeply supported:
 
 | Incident | Evidence collected |
 | --- | --- |
@@ -22,6 +22,8 @@ The fixture contains `INC-001` through `INC-025`, spanning identity, messaging, 
 | `INC-019` | Network config, gateway, external connectivity, DNS resolution |
 | `INC-021` | Host status, CPU/memory/disk metrics, active alerts |
 | `INC-023` | Application health, latency, error rate, host context, alerts |
+| `INC-024` | Application health, host status, metrics, active alerts |
+| `INC-026` | User profile and account status |
 
 Other catalog incidents are coherent fixture scenarios but intentionally return `investigation_not_supported` until a later mission adds their playbooks.
 

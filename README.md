@@ -259,7 +259,7 @@ Start from the repository root so the default relative database path resolves to
 uv run --project .\apps\api --frozen python -m uvicorn main:app --app-dir .\apps\api\src --reload
 ```
 
-The API is at `http://localhost:8000`; OpenAPI is at `http://localhost:8000/docs`. First startup creates the schema, applies compatible legacy upgrades, and seeds 25 incidents. Normal startup preserves existing data.
+The API is at `http://localhost:8000`; OpenAPI is at `http://localhost:8000/docs`. First startup creates the schema, applies compatible legacy upgrades, and seeds 26 incidents. Normal startup preserves existing data.
 
 Run the MCP server independently:
 

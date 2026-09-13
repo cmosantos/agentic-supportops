@@ -40,6 +40,7 @@ export type InvestigationStep = {
 };
 export type AIStatus = "running" | "completed" | "insufficient_evidence" | "failed";
 export type InvestigationGoal = {
+  goal_profile?: "root_cause" | "account_lock_state" | "application_availability" | "evidence_sufficiency" | null;
   objective: string;
   success_criteria: string[];
   constraints: string[];
