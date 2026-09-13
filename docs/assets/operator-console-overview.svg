@@ -1,0 +1,93 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900" role="img" aria-labelledby="title desc">
+  <title id="title">Agentic SupportOps operator console overview</title>
+  <desc id="desc">A portfolio visual of the dark themed Agentic SupportOps operator console showing incident INC-026, governed lifecycle, current state and runtime selection.</desc>
+  <rect width="1600" height="900" fill="#0e0c12"/>
+  <rect x="54" y="40" width="1492" height="820" rx="22" fill="#121018" stroke="#302b38"/>
+  <rect x="54" y="40" width="1492" height="74" rx="22" fill="#17141d"/>
+  <rect x="54" y="92" width="1492" height="22" fill="#17141d"/>
+  <line x1="54" y1="114" x2="1546" y2="114" stroke="#302b38"/>
+
+  <rect x="82" y="58" width="40" height="40" rx="10" fill="#211932" stroke="#694b91"/>
+  <text x="96" y="84" fill="#eadcff" font-family="Inter,Segoe UI,sans-serif" font-size="19" font-weight="800">A</text>
+  <circle cx="112" cy="78" r="3" fill="#c19cf6"/>
+  <text x="138" y="70" fill="#c19cf6" font-family="Inter,Segoe UI,sans-serif" font-size="10" font-weight="800" letter-spacing="1.5">OPERATOR CONSOLE</text>
+  <text x="138" y="91" fill="#eeeaf4" font-family="Inter,Segoe UI,sans-serif" font-size="21" font-weight="700">Agentic SupportOps</text>
+  <text x="138" y="106" fill="#a7a0b1" font-family="Inter,Segoe UI,sans-serif" font-size="11">Investigate, govern, verify.</text>
+
+  <rect x="1112" y="63" width="160" height="30" rx="15" fill="#17141d" stroke="#302b38"/>
+  <circle cx="1132" cy="78" r="5" fill="#78d9b1"/>
+  <text x="1146" y="82" fill="#a7a0b1" font-family="Inter,Segoe UI,sans-serif" font-size="11" font-weight="650">Backend online</text>
+  <rect x="1282" y="63" width="116" height="30" rx="15" fill="#17141d" stroke="#302b38"/>
+  <text x="1300" y="82" fill="#a7a0b1" font-family="Inter,Segoe UI,sans-serif" font-size="11" font-weight="650">Contoso simulation</text>
+  <rect x="1408" y="63" width="108" height="30" rx="15" fill="#16342c" stroke="#31574c"/>
+  <text x="1428" y="82" fill="#78d9b1" font-family="Inter,Segoe UI,sans-serif" font-size="11" font-weight="650">AI available</text>
+
+  <text x="84" y="151" fill="#a7a0b1" font-family="Inter,Segoe UI,sans-serif" font-size="10" font-weight="750" letter-spacing="1.2">ACTIVE INCIDENT</text>
+  <text x="189" y="151" fill="#c19cf6" font-family="Inter,Segoe UI,sans-serif" font-size="12" font-weight="800" letter-spacing="1.2">INC-026</text>
+  <text x="84" y="190" fill="#eeeaf4" font-family="Inter,Segoe UI,sans-serif" font-size="34" font-weight="700">User account locked</text>
+  <text x="84" y="218" fill="#b7afc0" font-family="Inter,Segoe UI,sans-serif" font-size="13">A simulated user cannot authenticate because the account is locked. Investigation is evidence-first and human governed.</text>
+  <text x="1370" y="148" fill="#a7a0b1" font-family="Inter,Segoe UI,sans-serif" font-size="9" font-weight="750">INCIDENT STATUS</text>
+  <rect x="1395" y="161" width="92" height="26" rx="13" fill="#392b1a" stroke="#6e5530"/>
+  <text x="1417" y="178" fill="#f1c875" font-family="Inter,Segoe UI,sans-serif" font-size="10" font-weight="800">OPEN</text>
+
+  <line x1="84" y1="244" x2="1516" y2="244" stroke="#302b38"/>
+  <text x="84" y="268" fill="#a7a0b1" font-family="Inter,Segoe UI,sans-serif" font-size="9" font-weight="750">SEVERITY</text>
+  <text x="268" y="268" fill="#a7a0b1" font-family="Inter,Segoe UI,sans-serif" font-size="9" font-weight="750">AFFECTED RESOURCE</text>
+  <text x="655" y="268" fill="#a7a0b1" font-family="Inter,Segoe UI,sans-serif" font-size="9" font-weight="750">CATEGORY</text>
+  <text x="933" y="268" fill="#a7a0b1" font-family="Inter,Segoe UI,sans-serif" font-size="9" font-weight="750">RUNTIME</text>
+  <rect x="84" y="278" width="58" height="24" rx="12" fill="#3b202b" stroke="#75404e"/>
+  <text x="100" y="294" fill="#ff9dae" font-family="Inter,Segoe UI,sans-serif" font-size="9" font-weight="800">HIGH</text>
+  <text x="268" y="296" fill="#eeeaf4" font-family="Consolas,monospace" font-size="13" font-weight="650">user:alex.morgan</text>
+  <text x="655" y="296" fill="#eeeaf4" font-family="Inter,Segoe UI,sans-serif" font-size="13" font-weight="650">Identity &amp; Access</text>
+  <text x="933" y="296" fill="#eeeaf4" font-family="Inter,Segoe UI,sans-serif" font-size="13" font-weight="650">Deterministic</text>
+
+  <text x="84" y="342" fill="#c19cf6" font-family="Inter,Segoe UI,sans-serif" font-size="10" font-weight="800" letter-spacing="1.2">GOVERNED WORKFLOW</text>
+  <text x="84" y="367" fill="#eeeaf4" font-family="Inter,Segoe UI,sans-serif" font-size="17" font-weight="700">Operational lifecycle</text>
+  <text x="1426" y="367" fill="#a7a0b1" font-family="Inter,Segoe UI,sans-serif" font-size="10" font-weight="700">PERSISTED STATE</text>
+
+  <g font-family="Inter,Segoe UI,sans-serif">
+    <g transform="translate(84 388)"><rect width="145" height="94" rx="8" fill="#17141d" stroke="#438b6e"/><text x="12" y="21" fill="#78d9b1" font-size="10" font-weight="750">01</text><circle cx="17" cy="42" r="5" fill="#78d9b1"/><text x="31" y="46" fill="#78d9b1" font-size="12" font-weight="750">Incident</text><text x="31" y="66" fill="#78d9b1" font-size="9">OPEN</text></g>
+    <g transform="translate(239 388)"><rect width="145" height="94" rx="8" fill="#17141d" stroke="#438b6e"/><text x="12" y="21" fill="#78d9b1" font-size="10" font-weight="750">02</text><circle cx="17" cy="42" r="5" fill="#78d9b1"/><text x="31" y="46" fill="#78d9b1" font-size="12" font-weight="750">Investigation</text><text x="31" y="66" fill="#78d9b1" font-size="9">COMPLETED</text></g>
+    <g transform="translate(394 388)"><rect width="145" height="94" rx="8" fill="#17141d" stroke="#438b6e"/><text x="12" y="21" fill="#78d9b1" font-size="10" font-weight="750">03</text><circle cx="17" cy="42" r="5" fill="#78d9b1"/><text x="31" y="46" fill="#78d9b1" font-size="12" font-weight="750">Evidence</text><text x="31" y="66" fill="#78d9b1" font-size="9">3 RECORDS</text></g>
+    <g transform="translate(549 388)"><rect width="145" height="94" rx="8" fill="#17141d" stroke="#438b6e"/><text x="12" y="21" fill="#78d9b1" font-size="10" font-weight="750">04</text><circle cx="17" cy="42" r="5" fill="#78d9b1"/><text x="31" y="46" fill="#78d9b1" font-size="12" font-weight="750">Proposal</text><text x="31" y="66" fill="#78d9b1" font-size="9">RECORDED</text></g>
+    <g transform="translate(704 388)"><rect width="145" height="94" rx="8" fill="#17141d" stroke="#438b6e"/><text x="12" y="21" fill="#78d9b1" font-size="10" font-weight="750">05</text><circle cx="17" cy="42" r="5" fill="#78d9b1"/><text x="31" y="46" fill="#78d9b1" font-size="12" font-weight="750">Approval</text><text x="31" y="66" fill="#78d9b1" font-size="9">APPROVED</text></g>
+    <g transform="translate(859 388)"><rect width="145" height="94" rx="8" fill="#17141d" stroke="#438b6e"/><text x="12" y="21" fill="#78d9b1" font-size="10" font-weight="750">06</text><circle cx="17" cy="42" r="5" fill="#78d9b1"/><text x="31" y="46" fill="#78d9b1" font-size="12" font-weight="750">Execution</text><text x="31" y="66" fill="#78d9b1" font-size="9">COMPLETED</text></g>
+    <g transform="translate(1014 388)"><rect width="145" height="94" rx="8" fill="#17141d" stroke="#438b6e"/><text x="12" y="21" fill="#78d9b1" font-size="10" font-weight="750">07</text><circle cx="17" cy="42" r="5" fill="#78d9b1"/><text x="31" y="46" fill="#78d9b1" font-size="12" font-weight="750">Attempt</text><text x="31" y="66" fill="#78d9b1" font-size="9">ACKNOWLEDGED</text></g>
+    <g transform="translate(1169 388)"><rect width="145" height="94" rx="8" fill="#17141d" stroke="#438b6e"/><text x="12" y="21" fill="#78d9b1" font-size="10" font-weight="750">08</text><circle cx="17" cy="42" r="5" fill="#78d9b1"/><text x="31" y="46" fill="#78d9b1" font-size="12" font-weight="750">Verification</text><text x="31" y="66" fill="#78d9b1" font-size="9">VERIFIED</text></g>
+    <g transform="translate(1324 388)"><rect width="162" height="94" rx="8" fill="#1a1523" stroke="#c19cf6"/><text x="12" y="21" fill="#c19cf6" font-size="10" font-weight="750">09</text><circle cx="17" cy="42" r="5" fill="#c19cf6"/><text x="31" y="46" fill="#c19cf6" font-size="12" font-weight="750">Human Resolution</text><text x="31" y="66" fill="#c19cf6" font-size="9">READY</text></g>
+  </g>
+
+  <rect x="84" y="510" width="1432" height="104" rx="12" fill="#1a1523" stroke="#443551"/>
+  <text x="106" y="537" fill="#c19cf6" font-family="Inter,Segoe UI,sans-serif" font-size="10" font-weight="800" letter-spacing="1.2">CURRENT STATE</text>
+  <text x="106" y="567" fill="#eeeaf4" font-family="Inter,Segoe UI,sans-serif" font-size="22" font-weight="700">Ready for human resolution</text>
+  <text x="106" y="590" fill="#d7cfdf" font-family="Inter,Segoe UI,sans-serif" font-size="12">An independent read confirms the expected technical outcome. The system still cannot close the incident by itself.</text>
+  <line x1="1268" y1="531" x2="1268" y2="593" stroke="#443551"/>
+  <text x="1292" y="548" fill="#a7a0b1" font-family="Inter,Segoe UI,sans-serif" font-size="9" font-weight="750">NEXT ACTION</text>
+  <text x="1292" y="575" fill="#dbc9f2" font-family="Inter,Segoe UI,sans-serif" font-size="15" font-weight="700">Resolve incident</text>
+
+  <text x="84" y="658" fill="#c19cf6" font-family="Inter,Segoe UI,sans-serif" font-size="10" font-weight="800" letter-spacing="1.2">FINDING</text>
+  <text x="84" y="681" fill="#eeeaf4" font-family="Inter,Segoe UI,sans-serif" font-size="16" font-weight="700">Choose a runtime</text>
+  <text x="1455" y="681" fill="#a7a0b1" font-family="Inter,Segoe UI,sans-serif" font-size="10" font-weight="700">READ-ONLY</text>
+
+  <rect x="84" y="701" width="446" height="104" rx="10" fill="#2b2140" stroke="#7956a7"/>
+  <rect x="84" y="701" width="4" height="104" rx="2" fill="#c19cf6"/>
+  <circle cx="111" cy="731" r="7" fill="#0e0c12" stroke="#c19cf6"/><circle cx="111" cy="731" r="3" fill="#c19cf6"/>
+  <text x="132" y="730" fill="#eeeaf4" font-family="Inter,Segoe UI,sans-serif" font-size="14" font-weight="750">Deterministic</text>
+  <text x="234" y="730" fill="#c19cf6" font-family="Inter,Segoe UI,sans-serif" font-size="9" font-weight="800">SELECTED</text>
+  <text x="132" y="751" fill="#a7a0b1" font-family="Inter,Segoe UI,sans-serif" font-size="11">Deterministic, rule-based investigation</text>
+  <text x="132" y="776" fill="#78d9b1" font-family="Inter,Segoe UI,sans-serif" font-size="10" font-weight="700">Available</text>
+
+  <rect x="545" y="701" width="446" height="104" rx="10" fill="#141119" stroke="#302b38"/>
+  <circle cx="572" cy="731" r="7" fill="#0e0c12" stroke="#777080"/>
+  <text x="593" y="730" fill="#eeeaf4" font-family="Inter,Segoe UI,sans-serif" font-size="14" font-weight="750">AI Investigation</text>
+  <text x="593" y="751" fill="#a7a0b1" font-family="Inter,Segoe UI,sans-serif" font-size="11">Model-assisted investigation</text>
+  <text x="593" y="776" fill="#78d9b1" font-family="Inter,Segoe UI,sans-serif" font-size="10" font-weight="700">Available</text>
+
+  <rect x="1006" y="701" width="510" height="104" rx="10" fill="#141119" stroke="#302b38"/>
+  <circle cx="1033" cy="731" r="7" fill="#0e0c12" stroke="#777080"/>
+  <text x="1054" y="730" fill="#eeeaf4" font-family="Inter,Segoe UI,sans-serif" font-size="14" font-weight="750">Agents SDK</text>
+  <text x="1054" y="751" fill="#a7a0b1" font-family="Inter,Segoe UI,sans-serif" font-size="11">Agent-based investigation runtime</text>
+  <text x="1054" y="776" fill="#78d9b1" font-family="Inter,Segoe UI,sans-serif" font-size="10" font-weight="700">Available</text>
+
+  <text x="84" y="836" fill="#756e80" font-family="Inter,Segoe UI,sans-serif" font-size="10">Portfolio visual based on the actual Agentic SupportOps UI and governed INC-026 journey.</text>
+</svg>
