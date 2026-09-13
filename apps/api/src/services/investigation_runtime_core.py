@@ -11,15 +11,11 @@ from domain.ai import (
     InvestigationRuntime,
     ProviderUsage,
 )
-from domain.investigation import (
-    InvestigationGoal,
-    InvestigationOrigin,
-    InvestigationPlan,
-    ToolResult,
-)
+from domain.investigation import InvestigationOrigin, ToolResult
 from observability.tracing import TraceBoundary
 from repositories.investigation_repository import InvestigationRepository
 from services.investigation_event_recorder import InvestigationEventRecorder
+from services.investigation_input import InvestigationExecutionInput
 from services.tool_registry import InvestigationToolRegistry
 
 
@@ -84,24 +80,28 @@ class InvestigationRunSession:
     def start(
         cls,
         repository: InvestigationRepository,
-        incident_id: int,
         model: str,
         mode: str,
-        runtime: InvestigationRuntime,
-        goal_snapshot: InvestigationGoal | None = None,
-        plan_snapshot: InvestigationPlan | None = None,
+        execution_input: InvestigationExecutionInput,
     ) -> "InvestigationRunSession":
         run = repository.start_ai_run(
-            incident_id,
+            execution_input.incident_id,
             model,
             mode=mode,
-            goal_snapshot=goal_snapshot,
-            plan_snapshot=plan_snapshot,
+            goal_snapshot=execution_input.goal,
+            plan_snapshot=execution_input.plan,
         )
+        runtime = InvestigationRuntime(execution_input.runtime)
         events = InvestigationEventRecorder(repository, run.id, runtime)
         started_at = monotonic()
         events.record(InvestigationEventType.RUN_STARTED, model=model, status="running")
-        return cls(repository, run, events, runtime, started_at)
+        return cls(
+            repository,
+            run,
+            events,
+            runtime,
+            started_at,
+        )
 
     def complete(
         self,
@@ -155,9 +155,8 @@ class InvestigationRuntimeCore:
 
     repository: InvestigationRepository
     tools: InvestigationToolRegistry
-    incident_id: int
+    execution_input: InvestigationExecutionInput
     investigation_id: int | None
-    runtime: InvestigationRuntime
     origin: InvestigationOrigin
     max_tool_calls: int
     max_identical_tool_calls: int
@@ -177,7 +176,7 @@ class InvestigationRuntimeCore:
         with self.tracing.span(
             "supportops.tool.execute",
             {
-                "supportops.runtime": self.runtime.value,
+                "supportops.runtime": self.execution_input.runtime,
                 "supportops.tool.name": name,
                 "supportops.tool.call_id": tool_call_id or "unknown",
                 "supportops.model_turn": model_turn or 0,
@@ -239,7 +238,9 @@ class InvestigationRuntimeCore:
         record_kwargs = {"origin": self.origin, "arguments": arguments}
         if self.investigation_id is not None:
             record_kwargs["investigation_id"] = self.investigation_id
-        evidence = self.repository.record_result(self.incident_id, result, **record_kwargs)
+        evidence = self.repository.record_result(
+            self.execution_input.incident_id, result, **record_kwargs
+        )
         self.selected_tools.append(name)
         tool_status = "completed" if result.success else "failed"
         tool_span.set_attribute("supportops.tool.status", tool_status)

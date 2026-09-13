@@ -42,11 +42,16 @@ and presents their persisted run history and review artifacts.
 ### Application-owned investigation goal
 
 All three runtimes build the same application-owned `InvestigationGoal` from the
-incident category. Responses and Agents SDK receive the same JSON input from
-`build_investigation_input(IncidentRecord, InvestigationGoal)`, with separate
-`goal` and `incident` objects. The Pydantic `InvestigationGoal` defines the required outcome, success
+incident category and controlled `GoalProfile`. The selected profile is stored in
+the goal snapshot rather than inferred later from objective text. The Pydantic
+`InvestigationGoal` defines the required outcome, success
 criteria, constraints, and human review requirement. The incident title remains
 a symptom label rather than evidence.
+
+```text
+Incident -> Goal -> Goal Profile -> Investigation Plan -> Runtime
+         -> Evidence / Findings -> Review
+```
 
 The application owns the goal, plan, constraints, policies, persisted evidence,
 and approval gates. The runtime owns actual tool selection and delegation where
@@ -57,8 +62,8 @@ persists the exact application-owned goal and plan as immutable run audit metada
 when the run is created, before tool or provider interaction. Neither snapshot
 contains a prompt, provider payload, scratchpad, hidden reasoning, or chain of
 thought. Legacy records may have no goal or plan snapshot. Investigation spans
-record only small goal-driven and human-review flags plus a short fingerprint that
-can be correlated with the persisted goal; they do not record goal or plan text.
+record only small goal/profile and human-review attributes plus short fingerprints
+that correlate with the persisted goal and plan; they do not record their contents.
 The review UI presents the persisted contract as secondary, read-only governance.
 
 ### Application-owned investigation plan
@@ -69,17 +74,25 @@ The review UI presents the persisted contract as secondary, read-only governance
 results, evidence references, agent names, reasoning metadata, or artificial step
 identifier. Actual `InvestigationStepRecord` rows remain the factual tool history.
 
-The application builds the plan deterministically. For Responses API and Agents
-SDK runs, both runtimes receive the same high-level plan shape alongside `goal` and
-`incident`; the exact same plan object is persisted before the first provider call.
+The application builds the plan deterministically, then creates one immutable
+`InvestigationExecutionInput` containing the incident facts, runtime, exact goal,
+and exact plan. The same typed input supplies persistence, tracing, and runtime
+execution. There is no fallback that silently builds a plan at the serialization
+boundary.
+
+For Responses API and Agents SDK runs, the envelope is rendered as a small,
+deterministic JSON object with separate `runtime`, `goal`, `plan`, and `incident`
+sections. The exact same plan object is supplied to the shared runtime governance
+and persisted before the first provider call.
 The plan guides intent but does not expand tool access, specialist access, runtime
 limits, or policy. There is no planner model call, planner agent, plan executor, or
 mapping between planned steps and actual tool calls.
 
-For deterministic runs, the plan is a human-readable projection of the already
-resolved catalog playbook. The service builds it from the same resolved sequence
-that it subsequently executes. The existing `PLAYBOOKS` definition remains the
-only execution authority; plan text is never interpreted as executable input.
+For deterministic runs, the runtime receives the same execution envelope. The
+plan is a human-readable projection of the already resolved catalog playbook, and
+the runtime fails before tool execution if the plan step count is incompatible
+with that resolved sequence. The existing `PLAYBOOKS` definition remains the only
+execution authority; plan text is never parsed or interpreted as executable input.
 
 `ai_investigations.plan_snapshot` is nullable JSON stored beside
 `goal_snapshot`. Both are committed in the run envelope before execution. Legacy
@@ -359,7 +372,7 @@ Lifecycle state and observability remain distinct. `action_executions`, physical
 
 This preserves governance because the projection grants no new authority. Human approval remains required for controlled execution, unknown mutation outcomes remain non-retryable, reconciliation remains read-only and explicit, verification remains independent, and incident resolution remains a separate human decision. The timeline makes those boundaries visible without weakening them.
 
-Tracing is off by default. Supported local exporters are `none` and `console`; no collector is required. Safe resource identifiers may be attached to spans, while prompts, evidence payloads, credentials, response bodies, and headers are excluded.
+Tracing is off by default. Supported local exporters are `none` and `console`; no collector is required. Investigation spans include the selected goal profile and short goal/plan fingerprints that correlate with the persisted snapshots. Safe resource identifiers may be attached to spans, while goal or plan contents, prompts, evidence payloads, credentials, response bodies, and headers are excluded.
 
 ## Operator control and limits
 

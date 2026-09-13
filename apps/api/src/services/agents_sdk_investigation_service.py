@@ -18,9 +18,10 @@ from integrations.agents_sdk_runtime import (
 )
 from repositories.investigation_repository import InvestigationRepository
 from services.investigation_input import (
+    InvestigationExecutionInput,
     build_investigation_goal,
     build_investigation_input,
-    investigation_goal_trace_attributes,
+    investigation_execution_trace_attributes,
 )
 from services.investigation_plan import build_model_guided_investigation_plan
 from services.investigation_runtime_core import (
@@ -67,17 +68,24 @@ class AgentsSDKInvestigationService:
     ) -> AIInvestigationExecution:
         if goal is None:
             goal = build_investigation_goal(incident)
+        plan = build_model_guided_investigation_plan(goal)
+        execution_input = build_investigation_input(
+            incident,
+            goal,
+            plan,
+            InvestigationRuntime.AGENTS_SDK.value,
+        )
         with self._tracing.span(
             "supportops.investigation",
             {
                 "supportops.incident_reference": incident.catalog_id
                 or str(incident.id),
                 "supportops.runtime": InvestigationRuntime.AGENTS_SDK.value,
-                **investigation_goal_trace_attributes(goal),
+                **investigation_execution_trace_attributes(execution_input),
                 "supportops.model": self._model_name,
             },
         ) as span:
-            execution = self._investigate(incident, goal)
+            execution = self._investigate(execution_input)
             span.set_attribute(
                 "supportops.investigation_id", execution.investigation.id
             )
@@ -88,20 +96,15 @@ class AgentsSDKInvestigationService:
             return execution
 
     def _investigate(
-        self, incident: IncidentRecord, goal: InvestigationGoal
+        self, execution_input: InvestigationExecutionInput
     ) -> AIInvestigationExecution:
         if self._model is None:
             raise AIInvestigationError("ai_not_configured", "OpenAI is not configured")
-        plan = build_model_guided_investigation_plan(goal)
-        investigation_input = build_investigation_input(incident, goal, plan)
         session = InvestigationRunSession.start(
             self._repository,
-            incident.id,
             self._model_name,
             mode=AGENTS_SDK_MODE,
-            runtime=InvestigationRuntime.AGENTS_SDK,
-            goal_snapshot=goal,
-            plan_snapshot=plan,
+            execution_input=execution_input,
         )
         run = session.run
         events = session.events
@@ -110,7 +113,7 @@ class AgentsSDKInvestigationService:
         context = AgentsSDKRunContext(
             repository=self._repository,
             tools=self._tools,
-            incident_id=incident.id,
+            execution_input=execution_input,
             investigation_id=run.id,
             max_tool_calls=self._max_tool_calls,
             max_identical_tool_calls=self._max_identical_tool_calls,
@@ -129,7 +132,7 @@ class AgentsSDKInvestigationService:
         try:
             result = Runner.run_sync(
                 agent,
-                investigation_input,
+                execution_input.to_model_context(),
                 context=context,
                 max_turns=self._max_turns,
                 run_config=RunConfig(tracing_disabled=True),
@@ -151,7 +154,7 @@ class AgentsSDKInvestigationService:
                 )
             grounded_result = ground_investigation_result(
                 self._repository,
-                incident.id,
+                execution_input.incident_id,
                 run.id,
                 InvestigationOrigin.AGENTS_SDK,
                 result.final_output,
@@ -165,7 +168,7 @@ class AgentsSDKInvestigationService:
                 model_turn,
                 metadata={"final_agent": result.last_agent.name},
             )
-            return self._execution(incident.id, completed)
+            return self._execution(execution_input.incident_id, completed)
         except MaxTurnsExceeded as error:
             usage, last_response_id = self._error_metadata(error, usage, last_response_id)
             session.fail("ai_loop_limit_reached", "Maximum Agents SDK turns reached", last_response_id, usage)

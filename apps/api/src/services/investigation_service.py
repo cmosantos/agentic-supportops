@@ -13,10 +13,15 @@ from domain.investigation import (
 from observability.tracing import TraceBoundary
 from repositories.investigation_repository import InvestigationRepository
 from services.investigation_input import (
+    InvestigationExecutionInput,
     build_investigation_goal,
-    investigation_goal_trace_attributes,
+    build_investigation_input,
+    investigation_execution_trace_attributes,
 )
-from services.investigation_plan import build_deterministic_investigation_plan
+from services.investigation_plan import (
+    ResolvedPlaybook,
+    build_deterministic_investigation_plan,
+)
 from services.playbooks import PLAYBOOKS
 from services.tool_registry import InvestigationToolRegistry
 
@@ -59,29 +64,28 @@ class InvestigationService:
         plan = build_deterministic_investigation_plan(
             goal, resolved_playbook, self._tools
         )
+        execution_input = build_investigation_input(
+            incident,
+            goal,
+            plan,
+            "deterministic",
+        )
         attributes = {
             "supportops.incident_reference": incident.catalog_id or str(incident.id),
             "supportops.runtime": "deterministic",
             "supportops.tool.transport": self._tools.transport,
-            **investigation_goal_trace_attributes(goal),
+            **investigation_execution_trace_attributes(execution_input),
         }
         with self._tracing.span("supportops.investigation", attributes) as span:
             run = self._repository.start_ai_run(
-                incident.id,
+                execution_input.incident_id,
                 model="deterministic-playbook",
                 mode="deterministic",
-                goal_snapshot=goal,
-                plan_snapshot=plan,
+                goal_snapshot=execution_input.goal,
+                plan_snapshot=execution_input.plan,
             )
             try:
-                for step, arguments in resolved_playbook:
-                    result = self._tools.execute(step.tool, arguments)
-                    self._repository.record_result(
-                        incident.id,
-                        result,
-                        arguments=arguments,
-                        investigation_id=run.id,
-                    )
+                self._execute_plan(execution_input, resolved_playbook, run.id)
                 run = self._repository.complete_deterministic_run(run)
             except Exception as error:
                 self._repository.fail_ai_run(
@@ -113,6 +117,33 @@ class InvestigationService:
                 )
             ],
         )
+
+    def _execute_plan(
+        self,
+        execution_input: InvestigationExecutionInput,
+        resolved_playbook: ResolvedPlaybook,
+        investigation_id: int,
+    ) -> None:
+        """Execute the resolved playbook under its exact governed plan."""
+        if len(execution_input.plan.steps) != len(resolved_playbook):
+            raise ValueError(
+                "Deterministic investigation plan does not match the resolved playbook"
+            )
+        for sequence, (planned_step, (step, arguments)) in enumerate(
+            zip(execution_input.plan.steps, resolved_playbook, strict=True),
+            start=1,
+        ):
+            if planned_step.sequence != sequence:
+                raise ValueError(
+                    "Deterministic investigation plan sequence is invalid"
+                )
+            result = self._tools.execute(step.tool, arguments)
+            self._repository.record_result(
+                execution_input.incident_id,
+                result,
+                arguments=arguments,
+                investigation_id=investigation_id,
+            )
 
     def get_investigation(self, incident: IncidentRecord) -> InvestigationRead:
         run = self._repository.get_ai_run(incident.id, mode="deterministic")

@@ -6,11 +6,12 @@ from time import monotonic
 from agents import Agent, FunctionTool, Model, ModelSettings
 from agents.tool_context import ToolContext
 
-from domain.ai import AIInvestigationResult, InvestigationEventType, InvestigationRuntime
+from domain.ai import AIInvestigationResult, InvestigationEventType
 from domain.investigation import InvestigationOrigin
 from repositories.investigation_repository import InvestigationRepository
 from services.tool_registry import InvestigationToolRegistry
 from services.investigation_event_recorder import InvestigationEventRecorder
+from services.investigation_input import InvestigationExecutionInput
 from observability.tracing import TraceBoundary
 from services.investigation_runtime_core import (
     InvestigationRuntimeCore,
@@ -66,7 +67,7 @@ class AgentsSDKToolLimitError(InvestigationToolLimitError):
 class AgentsSDKRunContext:
     repository: InvestigationRepository
     tools: InvestigationToolRegistry
-    incident_id: int
+    execution_input: InvestigationExecutionInput
     max_tool_calls: int
     max_identical_tool_calls: int
     investigation_id: int | None = None
@@ -80,9 +81,8 @@ class AgentsSDKRunContext:
         self.governance = InvestigationRuntimeCore(
             repository=self.repository,
             tools=self.tools,
-            incident_id=self.incident_id,
+            execution_input=self.execution_input,
             investigation_id=self.investigation_id,
-            runtime=InvestigationRuntime.AGENTS_SDK,
             origin=InvestigationOrigin.AGENTS_SDK,
             max_tool_calls=self.max_tool_calls,
             max_identical_tool_calls=self.max_identical_tool_calls,

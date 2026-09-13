@@ -105,6 +105,8 @@ def test_gateway_instructions_treat_plan_as_intent_not_authority() -> None:
     assert "application-owned `plan`" in instructions
     assert "does not expand available tools" in instructions
     assert "runtime limits" in instructions
+    assert "`goal.goal_profile`" in instructions
+    assert "implicitly replan" in instructions
 
 
 def test_gateway_constructs_sdk_with_retry_and_timeout_controls(monkeypatch) -> None:

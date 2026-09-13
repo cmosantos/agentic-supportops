@@ -262,6 +262,8 @@ def test_orchestrator_instructions_define_resource_domain_boundaries() -> None:
     assert "application-owned `plan`" in agent.instructions
     assert "does not expand available tools or specialist access" in agent.instructions
     assert "runtime limits" in agent.instructions
+    assert "`goal.goal_profile`" in agent.instructions
+    assert "implicitly replan" in agent.instructions
 
 
 def test_endpoint_specialist_instructions_reject_non_device_identifiers() -> None:

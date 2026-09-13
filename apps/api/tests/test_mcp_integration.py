@@ -21,6 +21,8 @@ from integrations.agents_sdk_runtime import AgentsSDKRunContext, build_agents_sd
 from main import app
 from api.dependencies import get_responses_gateway, get_trace_boundary
 from observability.tracing import TraceBoundary
+from services.investigation_input import build_investigation_goal, build_investigation_input
+from services.investigation_plan import build_model_guided_investigation_plan
 from services.tool_registry import InvestigationToolRegistry
 from tests.fakes import FakeResponsesGateway, call_turn, final_turn
 
@@ -235,10 +237,28 @@ def test_agents_sdk_opt_in_dispatches_through_mcp_without_model_call(mcp_tools) 
 
     repository = RecordingRepository()
     events = RecordingEvents()
+    incident = SimpleNamespace(
+        id=14,
+        catalog_id="INC-MCP",
+        title="Reported disk pressure",
+        description="Test incident",
+        category="endpoint",
+        priority=SimpleNamespace(value="high"),
+        affected_resource_type="device",
+        affected_resource_id="WS-002",
+        investigation_context={"device_id": "WS-002"},
+    )
+    goal = build_investigation_goal(incident)
+    execution_input = build_investigation_input(
+        incident,
+        goal,
+        build_model_guided_investigation_plan(goal),
+        "agents_sdk",
+    )
     context = AgentsSDKRunContext(
         repository=repository,
         tools=mcp_tools,
-        incident_id=14,
+        execution_input=execution_input,
         max_tool_calls=2,
         max_identical_tool_calls=2,
         events=events,

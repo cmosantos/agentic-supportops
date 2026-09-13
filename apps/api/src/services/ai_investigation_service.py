@@ -24,9 +24,10 @@ from domain.investigation import (
 from integrations.responses_gateway import ResponsesProviderError
 from repositories.investigation_repository import InvestigationRepository
 from services.investigation_input import (
+    InvestigationExecutionInput,
     build_investigation_goal,
     build_investigation_input,
-    investigation_goal_trace_attributes,
+    investigation_execution_trace_attributes,
 )
 from services.investigation_plan import build_model_guided_investigation_plan
 from services.tool_registry import InvestigationToolRegistry
@@ -77,16 +78,23 @@ class AIInvestigationService:
     ) -> AIInvestigationExecution:
         if goal is None:
             goal = build_investigation_goal(incident)
+        plan = build_model_guided_investigation_plan(goal)
+        execution_input = build_investigation_input(
+            incident,
+            goal,
+            plan,
+            InvestigationRuntime.MANUAL_RESPONSES.value,
+        )
         attributes = {
             "supportops.incident_reference": incident.catalog_id or str(incident.id),
             "supportops.runtime": InvestigationRuntime.MANUAL_RESPONSES.value,
-            **investigation_goal_trace_attributes(goal),
+            **investigation_execution_trace_attributes(execution_input),
         }
         if self._gateway is not None:
             attributes["supportops.model"] = self._gateway.model
         attributes["supportops.tool.transport"] = self._tools.transport
         with self._tracing.span("supportops.investigation", attributes) as span:
-            execution = self._investigate(incident, goal)
+            execution = self._investigate(execution_input)
             span.set_attribute(
                 "supportops.investigation_id", execution.investigation.id
             )
@@ -97,20 +105,15 @@ class AIInvestigationService:
             return execution
 
     def _investigate(
-        self, incident: IncidentRecord, goal: InvestigationGoal
+        self, execution_input: InvestigationExecutionInput
     ) -> AIInvestigationExecution:
         if self._gateway is None:
             raise AIInvestigationError("ai_not_configured", "OpenAI is not configured")
-        plan = build_model_guided_investigation_plan(goal)
-        investigation_input = build_investigation_input(incident, goal, plan)
         session = InvestigationRunSession.start(
             self._repository,
-            incident.id,
             self._gateway.model,
             mode="ai",
-            runtime=InvestigationRuntime.MANUAL_RESPONSES,
-            goal_snapshot=goal,
-            plan_snapshot=plan,
+            execution_input=execution_input,
         )
         run = session.run
         events = session.events
@@ -118,7 +121,11 @@ class AIInvestigationService:
         last_response_id: str | None = None
         try:
             turn = self._model_turn(
-                events, 1, lambda: self._gateway.create_initial(investigation_input)
+                events,
+                1,
+                lambda: self._gateway.create_initial(
+                    execution_input.to_model_context()
+                ),
             )
             iterations = 1
             usage = self._add_usage(usage, turn.usage)
@@ -126,9 +133,8 @@ class AIInvestigationService:
             governance = InvestigationRuntimeCore(
                 repository=self._repository,
                 tools=self._tools,
-                incident_id=incident.id,
+                execution_input=execution_input,
                 investigation_id=run.id,
-                runtime=InvestigationRuntime.MANUAL_RESPONSES,
                 origin=InvestigationOrigin.AI,
                 max_tool_calls=self._max_tool_calls,
                 max_identical_tool_calls=self._max_identical_tool_calls,
@@ -173,7 +179,7 @@ class AIInvestigationService:
                 raise AIInvestigationError("ai_invalid_result", "OpenAI returned an invalid investigation result") from error
             result = ground_investigation_result(
                 self._repository,
-                incident.id,
+                execution_input.incident_id,
                 run.id,
                 InvestigationOrigin.AI,
                 result,
@@ -185,7 +191,7 @@ class AIInvestigationService:
                 turn.model,
                 iterations,
             )
-            return self._execution(incident.id, completed)
+            return self._execution(execution_input.incident_id, completed)
         except ResponsesProviderError as error:
             session.fail(error.code, str(error), last_response_id, usage)
             raise AIInvestigationError(error.code, str(error)) from error

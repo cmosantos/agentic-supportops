@@ -25,6 +25,7 @@ class InvestigationGoal(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    goal_profile: GoalProfile | None = None
     objective: str = Field(min_length=1)
     success_criteria: list[str] = Field(min_length=1)
     constraints: list[str] = Field(min_length=1)

@@ -15,6 +15,7 @@ from services.investigation_input import (
     build_investigation_input,
     investigation_goal_fingerprint,
 )
+from services.investigation_plan import build_model_guided_investigation_plan
 from services.playbooks import PLAYBOOKS
 from tests.fakes import FakeResponsesGateway, final_turn
 from tests.test_ai_investigation import run_with_fake as run_manual
@@ -26,15 +27,21 @@ from tests.test_agents_sdk_investigation import (
 @pytest.fixture
 def incident():
     return IncidentRecord(
-        catalog_id="INC-goal", title="DNS failure alleged", description="Reported symptom",
+        id=999, catalog_id="INC-goal", title="DNS failure alleged", description="Reported symptom",
         category="network", priority=next(iter(IncidentPriority)),
         affected_resource_type="device", affected_resource_id=" Ws-003/Exact ",
         investigation_context={"host_id": "Host-A", "hostname": "Portal.Example"},
     )
 
 
+def model_execution_input(incident, runtime="manual_responses"):
+    goal = build_investigation_goal(incident)
+    plan = build_model_guided_investigation_plan(goal)
+    return build_investigation_input(incident, goal, plan, runtime)
+
+
 def test_goal_contract_forbids_unexpected_fields(incident):
-    data = json.loads(build_investigation_input(incident))["goal"]
+    data = json.loads(model_execution_input(incident).to_model_context())["goal"]
     assert InvestigationGoal.model_validate(data).human_action_required is True
     assert InvestigationGoal.model_json_schema()["additionalProperties"] is False
     with pytest.raises(ValidationError) as error:
@@ -43,10 +50,18 @@ def test_goal_contract_forbids_unexpected_fields(incident):
 
 
 def test_input_preserves_incident_separately_and_deterministically(incident):
-    raw = build_investigation_input(incident)
-    assert build_investigation_input(incident) == raw
+    goal = build_investigation_goal(incident)
+    plan = build_model_guided_investigation_plan(goal)
+    execution_input = build_investigation_input(
+        incident, goal, plan, "manual_responses"
+    )
+    raw = execution_input.to_model_context()
+    assert execution_input == build_investigation_input(
+        incident, goal, plan, "manual_responses"
+    )
     payload = json.loads(raw)
-    assert set(payload) == {"goal", "plan", "incident"}
+    assert set(payload) == {"runtime", "goal", "plan", "incident"}
+    assert payload["runtime"] == "manual_responses"
     assert payload["incident"] == {
         "catalog_id": incident.catalog_id, "title": incident.title,
         "description": incident.description, "category": incident.category,
@@ -58,7 +73,11 @@ def test_input_preserves_incident_separately_and_deterministically(incident):
     incident.affected_resource_id = None
     incident.catalog_id = None
     incident.investigation_context = {}
-    sparse = json.loads(build_investigation_input(incident))
+    sparse = json.loads(
+        build_investigation_input(
+            incident, goal, plan, "manual_responses"
+        ).to_model_context()
+    )
     assert sparse["incident"]["affected_resource_id"] is None
     assert sparse["incident"]["affected_resource_type"] is None
     assert sparse["incident"]["catalog_id"] is None
@@ -66,8 +85,27 @@ def test_input_preserves_incident_separately_and_deterministically(incident):
     assert sparse["goal"] == payload["goal"]
 
 
+def test_execution_input_requires_and_preserves_the_selected_plan(incident):
+    goal = build_investigation_goal(
+        incident, GoalProfile.APPLICATION_AVAILABILITY
+    )
+    plan = build_model_guided_investigation_plan(goal)
+
+    execution_input = build_investigation_input(
+        incident, goal, plan, "manual_responses"
+    )
+
+    assert execution_input.goal is goal
+    assert execution_input.plan is plan
+    assert execution_input.goal.goal_profile is GoalProfile.APPLICATION_AVAILABILITY
+    with pytest.raises(TypeError):
+        build_investigation_input(incident, goal)
+
+
 def test_goal_describes_evidence_and_safety_boundaries(incident):
-    goal = InvestigationGoal.model_validate(json.loads(build_investigation_input(incident))["goal"])
+    goal = InvestigationGoal.model_validate(
+        json.loads(model_execution_input(incident).to_model_context())["goal"]
+    )
     criteria = " ".join(goal.success_criteria).lower()
     constraints = " ".join(goal.constraints).lower()
     assert "persisted tool evidence" in criteria
@@ -123,6 +161,7 @@ def test_each_goal_profile_builds_a_stable_contract(
     second = build_investigation_goal(incident, profile)
 
     assert first == second
+    assert first.goal_profile is profile
     assert expected_objective in first.objective
     assert InvestigationGoal.model_validate(first.model_dump()) == first
 
@@ -188,6 +227,9 @@ def test_valid_alternate_profile_changes_goal_but_not_deterministic_playbook(
 
     assert response.status_code == 200, response.text
     body = response.json()
+    assert body["investigation"]["goal_snapshot"]["goal_profile"] == (
+        GoalProfile.EVIDENCE_SUFFICIENCY.value
+    )
     assert body["investigation"]["goal_snapshot"] == (
         build_investigation_goal(
             incident, GoalProfile.EVIDENCE_SUFFICIENCY
@@ -276,21 +318,24 @@ def test_both_runtimes_call_shared_builder_and_deliver_same_payload(seeded_clien
     assert isinstance(sdk_builder.call_args.args[1], InvestigationGoal)
     assert manual_goal_builder.call_args.args == (manual_builder.call_args.args[0],)
     assert sdk_goal_builder.call_args.args == (sdk_builder.call_args.args[0],)
-    expected = build_investigation_input(
-        manual_builder.call_args.args[0], manual_goals[0]
-    )
-    assert expected == build_investigation_input(
-        sdk_builder.call_args.args[0], sdk_goals[0]
-    )
-    assert gateway.initial_inputs == [expected]
+    assert manual_builder.call_args.args[3] == "manual_responses"
+    assert sdk_builder.call_args.args[3] == "agents_sdk"
+    manual_payload = json.loads(gateway.initial_inputs[0])
     sdk_input = model.calls[0]["input"]
     if isinstance(sdk_input, list):
         sdk_input = next(item["content"] for item in sdk_input if item.get("role") == "user")
-    assert sdk_input == expected
+    sdk_payload = json.loads(sdk_input)
+    assert manual_payload["runtime"] == "manual_responses"
+    assert sdk_payload["runtime"] == "agents_sdk"
+    assert {
+        key: manual_payload[key] for key in ("goal", "plan", "incident")
+    } == {
+        key: sdk_payload[key] for key in ("goal", "plan", "incident")
+    }
     for response in [manual, sdk]:
         investigation = response.json()["investigation"]
         assert InvestigationGoal.model_validate(investigation["goal_snapshot"])
-        assert investigation["goal_snapshot"] == json.loads(expected)["goal"]
+        assert investigation["goal_snapshot"] == manual_payload["goal"]
         result = investigation["result"]
         assert result["human_action_required"] is True
         assert result["status"] == "insufficient_evidence"
