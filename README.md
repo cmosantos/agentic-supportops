@@ -33,6 +33,26 @@ Release baseline:
 
 See [Publication readiness](docs/publication-readiness.md) and the [Changelog](CHANGELOG.md) for the release evidence.
 
+## 🖼️ Visual tour
+
+### Operator console
+
+The operator console keeps incident context, persisted lifecycle state, runtime choice and the next human action visible in one governed workspace.
+
+![Agentic SupportOps operator console](docs/assets/operator-console-overview.svg)
+
+### Governed control boundaries
+
+The system deliberately separates model-assisted diagnosis from approval, execution, independent verification and final incident resolution.
+
+![Agentic SupportOps governed lifecycle](docs/assets/governed-lifecycle.svg)
+
+### INC-026 golden journey
+
+`INC-026` demonstrates the complete end-to-end path: read-only evidence, bounded proposal, human approval, controlled execution, a fresh verification read and explicit human resolution.
+
+![INC-026 golden journey](docs/assets/inc026-golden-journey.svg)
+
 ## 🧭 Governed investigation lifecycle
 
 ```mermaid
