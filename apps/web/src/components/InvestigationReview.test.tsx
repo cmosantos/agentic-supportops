@@ -18,6 +18,7 @@ it("renders the persisted investigation contract for a deterministic run", async
         model: "deterministic-playbook",
         response_id: null,
         goal_snapshot: {
+          goal_profile: "application_availability",
           objective,
           success_criteria: ["Use persisted tool evidence."],
           constraints: ["Use read-only investigation tools."],
@@ -64,6 +65,8 @@ it("renders the persisted investigation contract for a deterministic run", async
   ).toBeVisible();
   const summary = screen.getByText("Investigation Contract");
   await userEvent.click(summary);
+  expect(screen.getByText("Goal Profile")).toBeVisible();
+  expect(screen.getByText("application availability")).toBeVisible();
   expect(screen.getByText(objective)).toBeVisible();
   expect(
     screen.getByText(

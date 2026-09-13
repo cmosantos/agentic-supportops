@@ -76,6 +76,10 @@ function InvestigationContract({ goal, plan, runId }: { goal: InvestigationGoal 
         This application-owned contract governed historical investigation run #{runId}. It is read-only audit metadata.
       </p>
       {goal && <dl className="contract-fields">
+        {goal.goal_profile && <div>
+          <dt>Goal Profile</dt>
+          <dd>{displayStatus(goal.goal_profile)}</dd>
+        </div>}
         <div className="contract-objective">
           <dt>Objective</dt>
           <dd>{goal.objective}</dd>
