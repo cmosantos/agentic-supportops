@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="720" viewBox="0 0 1600 720" role="img" aria-labelledby="title desc">
+<title id="title">Agentic SupportOps governed lifecycle</title><desc id="desc">Visual architecture of the governed incident investigation lifecycle, separating model assistance from approval, execution, verification and resolution.</desc>
+<rect width="1600" height="720" fill="#0e0c12"/><rect x="48" y="42" width="1504" height="636" rx="24" fill="#15121a" stroke="#302b38"/>
+<text x="88" y="98" fill="#c19cf6" font-family="Inter,Segoe UI,sans-serif" font-size="12" font-weight="800" letter-spacing="2">AGENTIC SUPPORTOPS</text>
+<text x="88" y="140" fill="#eeeaf4" font-family="Inter,Segoe UI,sans-serif" font-size="34" font-weight="750">Governed investigation lifecycle</text>
+<text x="88" y="170" fill="#a7a0b1" font-family="Inter,Segoe UI,sans-serif" font-size="15">The model can investigate and recommend. The application and human operator own control boundaries.</text>
+
+<g font-family="Inter,Segoe UI,sans-serif">
+  <g transform="translate(88 238)"><rect width="138" height="100" rx="12" fill="#1e1a26" stroke="#594478"/><text x="18" y="31" fill="#c19cf6" font-size="11" font-weight="800">01 · INCIDENT</text><text x="18" y="59" fill="#eeeaf4" font-size="15" font-weight="700">Incident</text><text x="18" y="79" fill="#a7a0b1" font-size="10">Operator selects case</text></g>
+  <path d="M226 288 H260" stroke="#665474" stroke-width="2"/><path d="M252 281 L260 288 L252 295" fill="none" stroke="#665474" stroke-width="2"/>
+  <g transform="translate(260 238)"><rect width="138" height="100" rx="12" fill="#1e1a26" stroke="#594478"/><text x="18" y="31" fill="#c19cf6" font-size="11" font-weight="800">02 · GOAL</text><text x="18" y="59" fill="#eeeaf4" font-size="15" font-weight="700">Goal profile</text><text x="18" y="79" fill="#a7a0b1" font-size="10">Application-owned</text></g>
+  <path d="M398 288 H432" stroke="#665474" stroke-width="2"/><path d="M424 281 L432 288 L424 295" fill="none" stroke="#665474" stroke-width="2"/>
+  <g transform="translate(432 238)"><rect width="138" height="100" rx="12" fill="#1e1a26" stroke="#594478"/><text x="18" y="31" fill="#c19cf6" font-size="11" font-weight="800">03 · PLAN</text><text x="18" y="59" fill="#eeeaf4" font-size="15" font-weight="700">Plan snapshot</text><text x="18" y="79" fill="#a7a0b1" font-size="10">Persisted contract</text></g>
+  <path d="M570 288 H604" stroke="#665474" stroke-width="2"/><path d="M596 281 L604 288 L596 295" fill="none" stroke="#665474" stroke-width="2"/>
+  <g transform="translate(604 238)"><rect width="158" height="100" rx="12" fill="#2b2140" stroke="#7956a7"/><text x="18" y="31" fill="#c19cf6" font-size="11" font-weight="800">04 · RUNTIME</text><text x="18" y="59" fill="#eeeaf4" font-size="15" font-weight="700">Investigation</text><text x="18" y="79" fill="#c9b8df" font-size="10">Rules / Responses / Agents</text></g>
+  <path d="M762 288 H796" stroke="#665474" stroke-width="2"/><path d="M788 281 L796 288 L788 295" fill="none" stroke="#665474" stroke-width="2"/>
+  <g transform="translate(796 238)"><rect width="138" height="100" rx="12" fill="#1e1a26" stroke="#438b6e"/><text x="18" y="31" fill="#78d9b1" font-size="11" font-weight="800">05 · EVIDENCE</text><text x="18" y="59" fill="#eeeaf4" font-size="15" font-weight="700">Evidence</text><text x="18" y="79" fill="#a7a0b1" font-size="10">Run-scoped facts</text></g>
+  <path d="M934 288 H968" stroke="#665474" stroke-width="2"/><path d="M960 281 L968 288 L960 295" fill="none" stroke="#665474" stroke-width="2"/>
+  <g transform="translate(968 238)"><rect width="138" height="100" rx="12" fill="#1e1a26" stroke="#594478"/><text x="18" y="31" fill="#c19cf6" font-size="11" font-weight="800">06 · PROPOSAL</text><text x="18" y="59" fill="#eeeaf4" font-size="15" font-weight="700">Recommendation</text><text x="18" y="79" fill="#a7a0b1" font-size="10">Bounded action</text></g>
+  <path d="M1106 288 H1140" stroke="#665474" stroke-width="2"/><path d="M1132 281 L1140 288 L1132 295" fill="none" stroke="#665474" stroke-width="2"/>
+  <g transform="translate(1140 238)"><rect width="138" height="100" rx="12" fill="#392b1a" stroke="#6e5530"/><text x="18" y="31" fill="#f1c875" font-size="11" font-weight="800">07 · HUMAN</text><text x="18" y="59" fill="#eeeaf4" font-size="15" font-weight="700">Approval</text><text x="18" y="79" fill="#d5c19a" font-size="10">Explicit decision</text></g>
+  <path d="M1278 288 H1312" stroke="#665474" stroke-width="2"/><path d="M1304 281 L1312 288 L1304 295" fill="none" stroke="#665474" stroke-width="2"/>
+  <g transform="translate(1312 238)"><rect width="152" height="100" rx="12" fill="#3b202b" stroke="#75404e"/><text x="18" y="31" fill="#ff9dae" font-size="11" font-weight="800">08 · EXECUTE</text><text x="18" y="59" fill="#eeeaf4" font-size="15" font-weight="700">Controlled action</text><text x="18" y="79" fill="#d5abb3" font-size="10">Policy bounded</text></g>
+</g>
+
+<path d="M1388 338 V394 H1040" fill="none" stroke="#51495b" stroke-width="2"/><path d="M1048 387 L1040 394 L1048 401" fill="none" stroke="#51495b" stroke-width="2"/>
+<g font-family="Inter,Segoe UI,sans-serif">
+  <g transform="translate(856 394)"><rect width="184" height="94" rx="12" fill="#16342c" stroke="#31574c"/><text x="18" y="30" fill="#78d9b1" font-size="11" font-weight="800">09 · VERIFY</text><text x="18" y="57" fill="#eeeaf4" font-size="15" font-weight="700">Independent read</text><text x="18" y="76" fill="#a7cdbc" font-size="10">New evidence, not inference</text></g>
+  <path d="M856 441 H820" stroke="#51495b" stroke-width="2"/><path d="M828 434 L820 441 L828 448" fill="none" stroke="#51495b" stroke-width="2"/>
+  <g transform="translate(628 394)"><rect width="192" height="94" rx="12" fill="#2b2140" stroke="#7956a7"/><text x="18" y="30" fill="#c19cf6" font-size="11" font-weight="800">10 · HUMAN</text><text x="18" y="57" fill="#eeeaf4" font-size="15" font-weight="700">Final resolution</text><text x="18" y="76" fill="#c9b8df" font-size="10">Resolve or keep open</text></g>
+</g>
+
+<rect x="88" y="542" width="1376" height="82" rx="12" fill="#17141d" stroke="#302b38"/>
+<text x="116" y="574" fill="#a7a0b1" font-family="Inter,Segoe UI,sans-serif" font-size="11" font-weight="700">CONTROL BOUNDARY</text>
+<text x="116" y="603" fill="#eeeaf4" font-family="Consolas,monospace" font-size="19" font-weight="700">AI diagnosis ≠ approval ≠ execution ≠ verification ≠ incident resolution</text>
+<text x="1030" y="590" fill="#78d9b1" font-family="Inter,Segoe UI,sans-serif" font-size="12" font-weight="700">Evidence-first</text>
+<text x="1148" y="590" fill="#c19cf6" font-family="Inter,Segoe UI,sans-serif" font-size="12" font-weight="700">Application-governed</text>
+<text x="1306" y="590" fill="#f1c875" font-family="Inter,Segoe UI,sans-serif" font-size="12" font-weight="700">Human-controlled</text>
+</svg>
