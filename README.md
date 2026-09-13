@@ -1,233 +1,228 @@
 # 🛠️ Agentic SupportOps
 
+**Governed IT incident investigation with deterministic and model-guided runtimes, auditable evidence, and human-controlled execution.**
+
 [![CI](https://github.com/cmosantos/agentic-supportops/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/cmosantos/agentic-supportops/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/badge/release-v1.0.1-blue)](https://github.com/cmosantos/agentic-supportops/tree/v1.0.1)
+[![Status](https://img.shields.io/badge/status-V1%20complete-success)](docs/publication-readiness.md)
+[![Python](https://img.shields.io/badge/Python-3.12-informational)](apps/api/pyproject.toml)
+[![React](https://img.shields.io/badge/React-TypeScript-informational)](apps/web)
+[![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-Agentic SupportOps is a local-first engineering project for controlled IT support investigations. It explores how deterministic workflows and model-guided runtimes can investigate the same incident through governed, read-only capabilities while preserving an auditable execution history.
+Agentic SupportOps is a **local-first engineering project** for controlled IT support investigations. It is not a general-purpose chatbot and it does not remediate real infrastructure. The unit of work is an incident, and the application—not the model—owns the investigation goal, plan, policies, evidence, approval gates and persisted operational history.
 
-This is not a general-purpose chatbot. The unit of work is an incident. Every investigation creates a persisted run and gathers factual, run-scoped evidence. Model-guided execution also records ordered lifecycle/tool events and finishes with a structured result. Historical runs remain available while existing latest-state APIs stay compatible.
+The project explores a practical question:
 
-## ✅ What is implemented
+> How can an AI-assisted support system investigate incidents and recommend actions without giving the model unrestricted operational control?
 
-- React/Vite operations console for the incident lifecycle, with deterministic, Responses API, and Agents SDK investigations.
-- FastAPI endpoints for incidents, investigations, evidence, latest state, run/event history, health, and AI configuration.
-- Declarative playbooks backed by 20 provider-independent, read-only SupportOps tools.
-- Optional OpenAI Responses API and comparative manager-style OpenAI Agents SDK runtime with a SupportOps orchestrator and three bounded diagnostic specialists.
-- Canonical `InvestigationToolRegistry` for definitions, exact argument validation, execution, and normalized results.
-- Direct execution by default and an opt-in local MCP stdio transport for three allowlisted capabilities.
-- SQLAlchemy/SQLite persistence with append-oriented run/event history, concurrency protection, and atomic terminal persistence.
-- Structured action proposals, durable human decisions, three approval-gated simulated execution capabilities, and independent post-execution outcome verification.
-- Optional application-owned OpenTelemetry spans; persisted events remain the domain source of truth.
-- Isolated backend tests and CI gates for backend, MCP, TypeScript, and production builds.
+## ✅ V1 status
 
-No real infrastructure is queried. Investigation tools are read-only; controlled execution changes only deterministic local simulation state and never touches a host process or service.
+**Agentic SupportOps v1.0.1 is complete and validated.**
 
-## 🎯 Engineering goals
+Release baseline:
 
-- **Controlled execution:** the application validates tool names, schemas, call limits, and results.
-- **Shared capability semantics:** all runtimes and transports reuse the same tool implementations.
-- **Historical traceability:** new runs do not overwrite completed or failed run records.
-- **Transactional integrity:** the required terminal event and terminal run state commit together.
-- **Concurrency safety:** SQLite is the final guard against two `RUNNING` executions for the same incident/runtime.
-- **Safe interoperability:** MCP exposes a fixed read-only allowlist, not the entire registry.
-- **Observable execution:** domain events describe business execution; optional spans add technical correlation.
-- **Reproducibility:** committed Python/Node lockfiles and CI use deterministic installation commands.
+- **26** simulated incidents across identity, messaging, endpoint, network and infrastructure scenarios.
+- **8** deeply supported deterministic playbooks.
+- **20** provider-independent read-only SupportOps tools.
+- **3** investigation runtimes: deterministic, OpenAI Responses API and OpenAI Agents SDK.
+- **3** end-to-end Golden Journeys: `INC-023`, `INC-024`, `INC-026`.
+- **310 backend tests** passed in the final full-suite baseline.
+- **76 frontend tests** passed in the final full-suite baseline.
+- TypeScript typecheck, Vite production build, MCP checks and dependency validation passed.
+- Final browser validation completed with `INC-026 — User account locked`, including proposal, human approval, controlled execution, independent verification and explicit human resolution.
+
+See [Publication readiness](docs/publication-readiness.md) and the [Changelog](CHANGELOG.md) for the release evidence.
+
+## 🧭 Governed investigation lifecycle
+
+```mermaid
+flowchart LR
+    Incident --> Goal[Investigation Goal]
+    Goal --> Profile[Goal Profile]
+    Profile --> Plan[Investigation Plan]
+    Plan --> Runtime
+    Runtime --> Evidence
+    Evidence --> Findings
+    Findings --> Proposal
+    Proposal --> Approval[Human Approval]
+    Approval --> Execution[Controlled Execution]
+    Execution --> Verification[Independent Verification]
+    Verification --> Resolution[Human Resolution]
+```
+
+The important boundary is intentional:
+
+```text
+AI diagnosis != approval != execution != verification != incident resolution
+```
+
+A model can investigate and recommend. It cannot silently rewrite the application-owned plan, automatically approve a mutation, execute arbitrary infrastructure actions, infer successful remediation from an execution acknowledgement, or close an incident by itself.
 
 ## 🏗️ Architecture
 
 ```mermaid
 flowchart TD
-    Operator[Operator] --> Web[React / Vite UI]
-    Web --> API[FastAPI routes]
+    Operator[Operator] --> Web[React / TypeScript / Vite]
+    Web --> API[FastAPI]
     API --> Services[Application services]
+
     Services --> Deterministic[Deterministic playbooks]
     Services --> Responses[Responses API runtime]
     Services --> Agents[Agents SDK orchestrator]
-    Agents --> Identity[Identity and Access specialist]
-    Agents --> Endpoint[Endpoint and Network specialist]
-    Agents --> Infra[Infrastructure and Application specialist]
+
+    Agents --> Identity[Identity & Access specialist]
+    Agents --> Endpoint[Endpoint & Network specialist]
+    Agents --> Infra[Infrastructure & Application specialist]
+
     Deterministic --> Registry[InvestigationToolRegistry]
     Responses --> Transport{Tool transport}
     Identity --> Transport
     Endpoint --> Transport
     Infra --> Transport
-    Transport -->|direct - default| Registry
-    Transport -->|MCP opt-in| Client[MCP client]
-    Client -->|stdio| Server[Local MCP server]
-    Server --> Registry
-    Registry --> Capabilities[Governed SupportOps capabilities]
+
+    Transport -->|direct| Registry
+    Transport -->|optional MCP stdio| MCP[MCP client/server]
+    MCP --> Registry
+
+    Registry --> Simulation[Typed Contoso simulation]
     Services --> Repository[SQLAlchemy repositories]
     Repository --> SQLite[(SQLite)]
-    Repository --> History[Runs and ordered events]
-    Services -. optional .-> OTel[OpenTelemetry boundary]
+    Services -. optional .-> OTel[OpenTelemetry]
 ```
 
-The frontend never talks to MCP directly; it calls FastAPI. MCP is an internal alternative transport between an agent runtime and selected existing tools. See [Architecture](docs/architecture.md) for responsibilities, lifecycle details, and transaction boundaries.
+The frontend communicates only with FastAPI. MCP is an internal comparative transport for a small fixed read-only allowlist; it is not the product API.
 
-## 🔄 Investigation lifecycle
+For the detailed boundaries, transaction rules and recovery semantics, see [Architecture](docs/architecture.md).
 
-1. An operator selects an incident and a supported deterministic or model-guided investigation.
-2. The application creates a persisted run. Deterministic execution resolves a playbook; model-guided execution selects either `manual_responses` or `agents_sdk`.
-3. The runtime appends `run_started`, model-turn, and tool lifecycle events in sequence order. In the Agents SDK path, the orchestrator delegates relevant diagnostic questions to specialists exposed as agent-tools and retains ownership of the final result.
-4. Tool calls pass through the canonical registry, which validates exact names and string arguments before executing a read-only capability.
-5. Successful tool observations become evidence with a stable ID and the owning `investigation_id`; every tool outcome becomes a similarly scoped investigation step.
-6. The runtime gives persisted evidence IDs back to the model so later turns can correlate multiple observations. The final contract exposes the committed evidence references, hypothesis, confidence, missing information, recommended next steps, and human-control requirement.
-7. A structured result completes the run, or a controlled failure marks it failed. Without useful evidence, the result becomes `insufficient_evidence` rather than presenting unsupported certainty. The terminal event and run transition share one transaction.
-8. Latest endpoints keep compatibility; historical endpoints retrieve prior runs, event timelines, and run-scoped artifacts explicitly.
+## 🔍 What the system demonstrates
 
-Models produce diagnoses, recommendations, and optional structured action proposals. The application validates proposal types, parameters, investigation ownership, and evidence references before a human may approve or reject. Approval never invokes an action automatically. For the three executable simulated actions, a later operator request replays the exact persisted proposal through a separate execution allowlist and deterministic executor.
+### Governed investigation input
 
-## 🔐 Controlled action execution
+Every goal-driven investigation can carry an application-owned contract containing:
+
+- `Goal Profile`
+- `Objective`
+- `Success Criteria`
+- `Constraints`
+- `Human Approval Required`
+- ordered `Investigation Plan`
+
+Goal and Plan snapshots are persisted with the investigation run so the operator can later answer:
+
+> What was this investigation trying to achieve, and what plan governed the runtime?
+
+The runtime receives that same governed input instead of silently rebuilding a different plan.
+
+### Run-scoped evidence and audit history
+
+Successful tool observations are persisted as evidence owned by a stable `investigation_id`. Investigation steps and lifecycle events remain scoped to the same run, while historical runs stay available for later review.
+
+The operator console separates:
+
+- intended investigation plan;
+- actual investigation activity;
+- evidence;
+- model findings;
+- action proposal;
+- human decision;
+- physical execution attempt;
+- verification evidence;
+- final human resolution.
+
+### Human-controlled remediation
+
+Investigation tools are read-only. The three simulated mutation capabilities are isolated behind the execution boundary:
+
+- `restart_simulated_service`
+- `unlock_simulated_user`
+- `reset_simulated_application_state`
+
+A proposal must reference persisted investigation evidence. Human approval is required, and **approval does not execute anything automatically**. A separate operator action replays the exact persisted proposal through a bounded execution policy.
+
+### Outcome certainty and safe recovery
+
+The system distinguishes a known result from an unknown mutation outcome. If invocation may have started but the acknowledgement is unreliable, the mutation is **not automatically retried**.
+
+Instead, the system supports:
 
 ```text
-AI Investigator -> Proposal -> Human Decision -> APPROVED only
-               -> Execution Authorization -> Execution Policy
-               -> Action Executor -> ToolRegistry capability
-               -> Execution Result -> Persistence + Audit Events
+OUTCOME_UNKNOWN
+    -> stale assessment
+    -> explicit read-only reconciliation
+    -> desired | undesired | inconclusive observation
 ```
 
-Human approval does not give the AI unrestricted tool access. `restart_simulated_service`, `unlock_simulated_user`, and `reset_simulated_application_state` are registered for controlled execution but excluded from investigation schemas and the MCP allowlist. The execute endpoint accepts no capability, target, or argument body: those values come from the persisted proposal. All three mutations affect only the deterministic local Contoso simulation, and no model is called during execution.
+This avoids pretending that distributed side effects are exactly-once when the real outcome is uncertain.
 
-The adjacent execution lookup endpoint returns the canonical execution already associated with that proposal, or `404` when none exists. It validates the incident, investigation, and proposal ownership chain and performs no capability invocation, retry, event append, lease/timestamp update, verification, or reconciliation.
+### Independent verification and human resolution
 
-SQLite enforces one `action_executions` row per proposal and one canonical physical attempt. The attempt records whether invocation started, its `failure_cause`, and its `outcome_certainty`. A known pre-mutation rejection is `NOT_APPLIED`; a timeout, acknowledgement loss, invalid result, or interruption after invocation is `UNKNOWN` and moves the execution to `OUTCOME_UNKNOWN`. Unknown mutation outcome is never automatically retried. The system reconciles by observing governed read-only state.
-
-### Explicit recovery and reconciliation
-
-```text
-Proposal -> Human Approval -> Controlled Execution -> Physical Attempt
-    known result -------------------------------------> normal completion
-    unknown result -> OUTCOME_UNKNOWN -> Stale Assessment
-                   -> Explicit Reconciliation -> read-only observation
-                   -> desired | undesired | inconclusive
-```
-
-The canonical physical attempt is attempt #1. `invocation_started_at` separates interruption before invocation from interruption after mutation may have begun. `NOT_APPLIED` means there is sufficient evidence that mutation did not start. `UNKNOWN` means mutation may have occurred, so retry is unsafe. Stale assessment classifies interrupted attempts after the configured threshold; it never invokes the action.
-
-Each attempt has at most one canonical reconciliation. The server derives its read-only observer, target, and expected state from policy. `DESIRED_STATE_OBSERVED` may complete the execution with `completion_basis=RECONCILIATION`; `UNDESIRED_STATE_OBSERVED` does not prove `NOT_APPLIED`; `INCONCLUSIVE` is not ordinary failure. The physical attempt remains historically `OUTCOME_UNKNOWN / UNKNOWN`: the attempt says, 'We do not know the original invocation result,' while reconciliation says, 'We can observe the desired state now.'
-
-Recovery is explicit and only claims a canonical `RUNNING` reconciliation after `ACTION_EXECUTION_RECONCILIATION_STALE_AFTER_SECONDS`. A SQLite compare-and-set renews its lease before one new read-only observation. It creates neither an attempt nor another reconciliation. A crash before observation becomes recoverable after a later stale window; a crash after observation but before terminal persistence may cause a future recovery to observe again. This is safe because read retry is not mutation retry, and the application does not claim artificial exactly-once semantics.
-
-`GET /action-executions/{execution_id}/attempts/{attempt_id}/reconciliation` returns persisted reconciliation state plus derived `is_stale`, `recoverable`, and typed `recovery_block_reason`. It never observes, recovers, renews a lease, creates events, or changes state. The GET is advisory; the explicit recovery POST always revalidates eligibility.
-
-The operator UI discovers attempt #1 through the side-effect-free canonical-attempt GET, then reads the reconciliation view. It exposes reconciliation only after an explicit click, never retries the mutation, and offers stale recovery only when the operational view reports `recoverable=true`; recovery still requires a separate explicit click.
-
-The Action Execution area also presents an Operational Execution Timeline from `GET /action-executions/{execution_id}/timeline`. It is a chronological, read-only projection of the existing persisted audit events for that execution, including attempt, stale assessment, reconciliation, verification, and related human resolution facts when they were actually recorded. It does not infer missing history or alter lifecycle state.
-
-## 🔎 Post-execution outcome verification
-
-Execution success proves that the approved action ran successfully. It does not prove that the incident condition was corrected. After a `COMPLETED` execution, the operator may request one canonical verification. The server derives the approved target from the persisted execution and proposal; the client supplies neither target nor observer.
-
-```text
-AI Investigator -> Proposal -> Human Approval -> Execution Policy
-                -> Controlled Action -> Execution COMPLETED
-                -> Verification Policy -> Read-only Observer
-                -> Verification Evidence -> VERIFIED | NOT_VERIFIED | FAILED
-```
-
-`restart_simulated_service` and `reset_simulated_application_state` map server-side to the existing `get_application_health` observer with expected state `healthy`. `unlock_simulated_user` maps to `get_account_status` with expected `locked=false`. These are new reads after execution, never inferences from `execution.result`. `VERIFIED` means the expected state was observed, `NOT_VERIFIED` means a reliable observation did not satisfy it, and `FAILED` means no reliable observation could be collected. No AI/model, MCP loop, shell, subprocess, external monitoring, or real service or account management participates.
-
-SQLite enforces one `outcome_verifications` row per execution. Requested/started events and the terminal verification state/event follow the existing transactional event pattern. Repeated requests return the canonical record without observing again. A verified outcome is human-visible evidence only: **`VERIFIED` does not automatically mean `INCIDENT RESOLVED`** and does not alter proposal, approval, execution, or incident history.
-
-## 👤 Human resolution gate
+Execution success proves only that the approved action was acknowledged. Verification performs a **new governed read** of the relevant state.
 
 ```text
 Execution COMPLETED != Verification VERIFIED != Incident RESOLVED
 ```
 
-Execution proves that an approved action completed. Verification independently proves whether the expected technical outcome was observed. Resolution records a separate human operational decision that the incident may be closed.
+Even after a verified technical outcome, the incident remains open until a human explicitly chooses `RESOLVE` or `KEEP_OPEN`.
+
+## 🤖 Investigation runtimes
+
+| Runtime | Purpose | Tool access |
+| --- | --- | --- |
+| Deterministic | Reproducible rule-based investigation | Canonical registry |
+| Responses API | Model-guided investigation | Direct registry or optional MCP allowlist |
+| Agents SDK | Orchestrated specialist investigation | Specialist-bounded access through shared runtime context |
+
+The Agents SDK path uses one orchestrator and three bounded diagnostic specialists while retaining application-owned governance and shared evidence ownership.
+
+## 🔌 MCP boundary
+
+Direct execution is the default:
 
 ```text
-AI Investigator -> Proposal -> Human Approval -> Controlled Execution
-                -> Independent Verification -> Verification Evidence
-                -> Human Resolution Gate -> KEEP_OPEN
-                                         -> RESOLVE -> Incident RESOLVED
+Agent runtime -> InvestigationToolRegistry -> capability
 ```
 
-The resolution API accepts only a persisted `verification_id`, `RESOLVE` or `KEEP_OPEN`, and an optional bounded reason. The server derives and validates the verification, execution, proposal, and incident ownership chain. `RESOLVE` requires `VERIFIED` evidence; `KEEP_OPEN` records a valid human review without changing incident status. A verified observation alone never changes the incident.
-
-One canonical review is allowed per verification, and SQLite permits at most one effective `RESOLVE` record per incident. The decision, incident transition, and audit events commit atomically. No model, agent, MCP tool, remediation capability, shell, subprocess, or external service participates in resolution.
-
-## Golden incident journeys
-
-The Contoso fixture includes three representative end-to-end journeys:
-
-- **API health degraded (`INC-023`)**: application health evidence supports the approved `restart_simulated_service` proposal for `SUPPORT-API`; verification reads application health again.
-- **Database connection pool exhausted (`INC-024`)**: application and host observations support the approved `reset_simulated_application_state` proposal for `CONTOSO-DB`; verification independently observes the recovered application state.
-- **User account locked (`INC-026`)**: `get_user` and `get_account_status` evidence support the approved `unlock_simulated_user` proposal for `USR-FRANK`; verification reads `locked=false` through the account observer.
-
-Each journey starts from a problem state in the deterministic simulation. Read-only evidence is persisted to the investigation run, the proposal is checked against that run, and a human approval is required before the bounded mutation. The physical attempt is persisted, normal acknowledged executions proceed directly to independent verification, and a separate human resolution decision is still required. The same scenarios remain available to deterministic and model-guided investigation paths; neither model runtime executes a mutation during investigation.
-
-## 🔌 Direct and MCP execution
-
-`TOOL_TRANSPORT=direct` is the default for Responses API and Agents SDK investigations:
-
-```text
-Agent runtime -> InvestigationToolRegistry -> existing capability
-```
-
-With `TOOL_TRANSPORT=mcp`, the runtime advertises only the MCP allowlist:
+Optional MCP mode:
 
 ```text
 Agent runtime -> MCP client -> stdio -> local MCP server
-              -> InvestigationToolRegistry -> same capability
+              -> InvestigationToolRegistry -> capability
 ```
 
-For the Agents SDK path, each specialist receives only the intersection of its fixed domain allowlist and the schemas exposed by the active registry/transport. The orchestrator receives only the three specialist agent-tools, never the 20 investigation capabilities directly. All nested calls share one `AgentsSDKRunContext`, so evidence ownership and total/repeated call limits cover the complete orchestration run.
-
-The official Python MCP SDK server exposes exactly:
+The MCP server exposes only:
 
 - `get_disk_usage`
 - `check_dns_resolution`
 - `get_application_health`
 
-The allowlist is fixed in code. The client launches `sys.executable -m integrations.mcp_server` without a shell, applies a bounded timeout, validates `ToolResult`, and closes resources after each call. MCP cannot select arbitrary commands/modules or access files, databases, credentials, or other registry tools.
+It cannot choose arbitrary commands, modules, files, credentials, databases or the complete application tool registry.
 
-MCP is not the product API: HTTP endpoints serve the UI and application clients, while MCP is an internal comparative tool transport.
+## 🧪 Golden Journeys
 
-## 🗄️ Persistence guarantees
+| Incident | Investigation | Controlled action | Independent verification |
+| --- | --- | --- | --- |
+| `INC-023` API health degraded | Application health and host context | Restart simulated service | Application health becomes healthy |
+| `INC-024` Connection pool exhausted | Application, host, metrics and alerts | Reset simulated application state | Application state becomes healthy |
+| `INC-026` User account locked | User and account state | Unlock simulated user | Account observer returns `locked=false` |
 
-- Runs are preserved as history; later runs do not replace earlier completed/failed records.
-- Events are append-oriented and returned by deterministic `sequence` order.
-- Only `RUNNING` records may transition; repeated terminal transitions are rejected.
-- A partial unique SQLite index permits one `RUNNING` run per `(incident_id, runtime mode)` while retaining historical terminal runs.
-- Database conflicts roll back before a structured HTTP `409` is returned.
-- The terminal event is flushed without committing; the corresponding run transition commits both or rolls both back.
-- Each proposal has at most one execution record; terminal execution state and terminal audit event commit together.
-- Each execution has one canonical physical attempt number 1, and each attempt has at most one canonical reconciliation.
-- Reconciliation terminal state, its audit event, and any execution completion via `RECONCILIATION` commit atomically.
-- Each completed execution has at most one outcome verification; terminal verification state and event commit together.
-- Each verification has at most one human resolution review; the final resolution decision, incident transition, and events commit together.
-- Latest APIs retain existing semantics. History APIs list runs newest-first and expose events by stable `investigation_id`.
-- Model-guided evidence and steps are linked to their `AIInvestigationRecord`; `/incidents/{incident}/investigation-runs/{investigation_id}/artifacts` resolves the exact evidence behind an older result.
+The final browser validation used `INC-026` and confirmed the complete human-governed lifecycle end to end.
 
-SQLite evolution uses a small idempotent compatibility layer at startup; Alembic is not used. Tests cover fresh databases and legacy unique-constraint/index shapes using temporary storage.
+## 🧰 Technology stack
 
-## 🧭 Project structure
+| Layer | Technology |
+| --- | --- |
+| Frontend | React, TypeScript, Vite |
+| Backend | FastAPI, Pydantic |
+| Persistence | SQLAlchemy, SQLite |
+| Model runtime | OpenAI Responses API |
+| Agent runtime | OpenAI Agents SDK |
+| Tool interoperability | MCP stdio, optional |
+| Observability | Persisted domain events + optional OpenTelemetry |
+| Python environment | uv |
+| Testing | pytest, Vitest, React Testing Library |
+| CI | GitHub Actions |
 
-```text
-agentic-supportops/
-├── .github/workflows/ci.yml       backend and frontend validation
-├── apps/api/
-│   ├── fixtures/                  fictional Contoso data
-│   ├── prompts/                   model-investigation instructions
-│   ├── src/
-│   │   ├── api/                   FastAPI routes and dependencies
-│   │   ├── db/                    ORM, sessions, schema compatibility
-│   │   ├── domain/                typed execution/API models
-│   │   ├── integrations/          OpenAI, Agents SDK, MCP boundaries
-│   │   ├── observability/         optional OpenTelemetry boundary
-│   │   ├── repositories/          persistence and fixture access
-│   │   ├── services/              orchestration and lifecycle rules
-│   │   └── tools/                 read-only capabilities
-│   ├── tests/                     backend and real MCP stdio tests
-│   ├── pyproject.toml
-│   └── uv.lock
-├── apps/web/                      React, TypeScript, Vite UI
-├── data/                          ignored SQLite data (`.gitkeep` only)
-└── docs/                          architecture, simulation, readiness
-```
-
-## 💻 Local development
+## 💻 Run locally
 
 ### Prerequisites
 
@@ -235,41 +230,37 @@ agentic-supportops/
 - [uv](https://docs.astral.sh/uv/)
 - Node.js 24 with npm
 
-Commands start from the repository root and are PowerShell-friendly.
+Clone the repository and start from its root.
 
 ### Backend
 
-Install locked runtime and development dependencies:
+Install the locked dependencies:
 
 ```powershell
 uv sync --project .\apps\api --frozen --extra dev
 ```
 
-No variable is required for deterministic execution, imports, or tests. Defaults and optional settings are in [`.env.example`](.env.example). Create an ignored local override only when needed:
-
-```powershell
-Copy-Item .env.example .env.local
-```
-
-Leave `OPENAI_API_KEY` empty unless intentionally making real model calls. Direct tool transport remains the default.
-
-Start from the repository root so the default relative database path resolves to `data/agentic_supportops.db`:
+Start FastAPI:
 
 ```powershell
 uv run --project .\apps\api --frozen python -m uvicorn main:app --app-dir .\apps\api\src --reload
 ```
 
-The API is at `http://localhost:8000`; OpenAPI is at `http://localhost:8000/docs`. First startup creates the schema, applies compatible legacy upgrades, and seeds 26 incidents. Normal startup preserves existing data.
+API: `http://localhost:8000`
 
-Run the MCP server independently:
+OpenAPI: `http://localhost:8000/docs`
+
+The first startup creates the local schema and seeds the Contoso fixture. Deterministic execution does not require an OpenAI credential.
+
+For model-guided runtimes, copy the safe environment template and configure your own local key:
 
 ```powershell
-$env:PYTHONPATH = ".\apps\api\src"
-uv run --project .\apps\api --frozen python -m integrations.mcp_server
-Remove-Item Env:PYTHONPATH
+Copy-Item .env.example .env.local
 ```
 
 ### Frontend
+
+In another PowerShell:
 
 ```powershell
 Set-Location .\apps\web
@@ -277,11 +268,11 @@ npm ci
 npm run dev
 ```
 
-The UI is at `http://localhost:5173`. Use `apps/web/.env.local` with `VITE_API_BASE_URL` only when the API is elsewhere.
+UI: `http://localhost:5173`
 
-### Resetting local data
+### Reset local simulation data
 
-This command drops application tables and restores the fixture baseline. Back up needed local history first.
+> **Warning:** this intentionally drops local application tables and restores the fixture baseline. Back up any local history you want to keep first.
 
 ```powershell
 $env:PYTHONPATH = ".\apps\api\src"
@@ -289,9 +280,9 @@ uv run --project .\apps\api --frozen python -m simulation.seed --reset
 Remove-Item Env:PYTHONPATH
 ```
 
-## 🧪 Testing
+## 🧪 Validation commands
 
-Backend tests cover HTTP contracts, services, tools, fake provider orchestration, lifecycle invariants, SQLite compatibility, tracing, and real MCP stdio parity.
+Backend:
 
 ```powershell
 uv lock --project .\apps\api --check
@@ -300,7 +291,7 @@ uv run --project .\apps\api --frozen python -m pytest .\apps\api\tests
 uv run --project .\apps\api --frozen python -m pytest .\apps\api\tests\test_mcp_integration.py
 ```
 
-The focused frontend behavioral suite uses Vitest, React Testing Library, and jsdom. It exercises incident loading and selection, all investigation runtime choices, historical runs and timeline, governed proposal/execution, unknown-outcome reconciliation, verification, human resolution, and stale-response protection without a live backend or model call:
+Frontend:
 
 ```powershell
 Set-Location .\apps\web
@@ -310,63 +301,66 @@ npm run build
 Set-Location ..\..
 ```
 
-## ⚙️ Continuous integration
+The GitHub Actions workflow runs the release-relevant backend and frontend validation without requiring a production secret or external infrastructure.
 
-The committed [GitHub Actions workflow](.github/workflows/ci.yml) targets pull requests and pushes to `master`:
+## 🧭 Repository map
 
-- **Backend:** Python 3.12, uv lock check, frozen dev installation, dependency health, application import, the full pytest suite, and separately visible real MCP stdio parity.
-- **Frontend:** Node.js 24, `npm ci`, focused behavioral tests, TypeScript, and Vite production build.
-
-No OpenAI credential, external MCP server, persistent database, or production secret is required. The public repository is published on GitHub, and the workflow and underlying commands have been validated locally and successfully on a GitHub-hosted Ubuntu runner.
-
-## 🔎 API discoverability
-
-FastAPI exposes the complete interactive contract at `/docs`.
-
-| Group | Representative endpoints |
-| --- | --- |
-| Health/config | `GET /health`, `GET /ai/config` |
-| Incidents | `POST /incidents`, `GET /incidents`, `GET /incidents/{incident_id}` |
-| Deterministic | `POST /incidents/{incident_id}/investigate`, `GET /incidents/{incident_id}/investigation` |
-| Model-guided | `POST /incidents/{incident_id}/investigate-ai`, `POST /incidents/{incident_id}/investigate-agent-sdk` |
-| Latest state | `GET /incidents/{incident_id}/ai-investigation`, `GET /incidents/{incident_id}/agent-sdk-investigation` |
-| Latest event timeline | `GET /incidents/{incident_id}/investigations/{runtime}/events` |
-| Run history | `GET /incidents/{incident_id}/investigation-runs?runtime=manual_responses` |
-| Event history | `GET /incidents/{incident_id}/investigation-runs/{run_id}/events` |
-| Controlled execution | `POST /incidents/{incident_id}/investigation-runs/{run_id}/action-proposals/{proposal_id}/execute` |
-| Read proposal execution | `GET /incidents/{incident_id}/investigation-runs/{run_id}/action-proposals/{proposal_id}/execution` |
-| Read canonical attempt | `GET /action-executions/{execution_id}/attempt` |
-| Assess stale attempt | `POST /action-executions/{execution_id}/attempts/{attempt_id}/stale-assessment` |
-| Reconcile unknown outcome | `POST /action-executions/{execution_id}/attempts/{attempt_id}/reconcile` |
-| Recover stale reconciliation | `POST /action-executions/{execution_id}/attempts/{attempt_id}/reconciliation/recover` |
-| Read reconciliation | `GET /action-executions/{execution_id}/attempts/{attempt_id}/reconciliation` |
-| Verify completed execution | `POST /action-executions/{execution_id}/verify` |
-| Read canonical verification | `GET /action-executions/{execution_id}/verification` |
-| Record human resolution review | `POST /incidents/{incident_id}/resolution-decisions` |
-| Read resolution history | `GET /incidents/{incident_id}/resolution-decisions` |
-
-References such as `INC-014` and numeric IDs are accepted where `{incident_id}` appears.
-
-```powershell
-Invoke-RestMethod http://localhost:8000/health
-Invoke-RestMethod http://localhost:8000/incidents
-Invoke-RestMethod http://localhost:8000/incidents/INC-014/investigation-runs
+```text
+agentic-supportops/
+├── .github/workflows/ci.yml
+├── apps/
+│   ├── api/
+│   │   ├── fixtures/
+│   │   ├── prompts/
+│   │   ├── src/
+│   │   │   ├── api/
+│   │   │   ├── db/
+│   │   │   ├── domain/
+│   │   │   ├── integrations/
+│   │   │   ├── observability/
+│   │   │   ├── repositories/
+│   │   │   ├── services/
+│   │   │   └── tools/
+│   │   └── tests/
+│   └── web/
+├── data/
+├── docs/
+├── CHANGELOG.md
+└── README.md
 ```
 
-## 📌 Current scope and future evolution
+## 📚 Documentation
 
-The project is currently a single-user local application over simulation data. It demonstrates controlled read-only investigation, optional model orchestration, MCP transport comparison, durable run/event history, local observability, and three approval-gated simulated actions. The operator console presents these capabilities as one incident-centered lifecycle. It does not remediate real systems.
+- [Architecture](docs/architecture.md) — service boundaries, lifecycle rules, persistence and recovery semantics.
+- [Simulation](docs/simulation.md) — Contoso fixture, 26 incidents, 8 supported playbooks and tool catalog.
+- [Operator console design](docs/operator-console-design.md) — UI responsibilities and human-control surfaces.
+- [Publication readiness](docs/publication-readiness.md) — final V1 validation evidence.
+- [Changelog](CHANGELOG.md) — release history for `v1.0.0` and `v1.0.1`.
 
-Not yet included:
+## 🔐 Scope and safety
 
-- authentication, authorization, or multi-user tenancy;
-- authentication-backed human identity and real remediation tools;
-- remote MCP, Streamable HTTP, OAuth, or persistent MCP pooling;
-- PostgreSQL or production database operations;
-- external ticketing/infrastructure integrations;
-- hosted telemetry, deployment, or cloud infrastructure;
+Agentic SupportOps is deliberately **simulation-only**.
 
-See [Publication readiness](docs/publication-readiness.md) for the verified publication and validation baseline.
+- No real host, account, mailbox, cloud resource or service is modified.
+- Investigation tools are read-only.
+- Controlled mutations change only deterministic local simulation state.
+- MCP exposes a fixed read-only subset of capabilities.
+- No shell or arbitrary command execution is part of the agent tool surface.
+- Human approval and human resolution are explicit application boundaries.
+- Persisted events remain the operational audit source of truth; tracing is optional technical correlation.
+
+## 🚧 Future evolution
+
+The V1 is intentionally closed. Possible future work belongs to a separate V2/backlog and may include:
+
+- authentication, authorization and multi-user tenancy;
+- real ticketing or infrastructure integrations behind explicit policies;
+- PostgreSQL and production database operations;
+- hosted deployment and remote observability;
+- stronger identity-backed approval workflows;
+- broader MCP transport scenarios.
+
+Those items are **not required for the completed V1**.
 
 ## 📄 License
 
